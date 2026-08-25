@@ -136,7 +136,6 @@ public:
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.1; }
-    int getLatencySamples() const override { return reportedLatencySamples; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
