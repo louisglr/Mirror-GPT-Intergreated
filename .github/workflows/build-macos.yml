@@ -1,0 +1,64 @@
+name: Build MIRROR
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build AU and VST3
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Xcode
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage plugin bundles
+        shell: bash
+        run: |
+          mkdir -p dist
+
+          while IFS= read -r -d '' bundle; do
+            ditto "$bundle" "dist/$(basename "$bundle")"
+          done < <(find build -type d -name '*.component' -print0)
+
+          while IFS= read -r -d '' bundle; do
+            ditto "$bundle" "dist/$(basename "$bundle")"
+          done < <(find build -type d -name '*.vst3' -print0)
+
+          if [ -z "$(find dist -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+            echo "No AU or VST3 bundle was produced."
+            exit 1
+          fi
+
+      - name: Ad-hoc sign bundles
+        shell: bash
+        run: |
+          find dist -type d \( -name '*.component' -o -name '*.vst3' \) -print0 |
+            while IFS= read -r -d '' bundle; do
+              codesign --force --deep --sign - "$bundle"
+            done
+
+      - name: Upload AU and VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-macOS-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
