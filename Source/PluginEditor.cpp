@@ -380,8 +380,12 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
         set("voiceVibratoRate" + idx, vibratoRate);
     };
 
-    // A preset should be deterministic: reset the controls outside a voice
-    // column as well as the visible voice parameters.
+    // A preset is self-contained: it resets musical context as well as
+    // visible controls, so it recalls the same sound in every session.
+    setChoice("mode", 0, 2);
+    setChoice("rootNote", 0, 12);
+    setChoice("scaleType", 1, 3);
+    set("freeze", 0.0f);
     set("dryPan", 0.0f); set("dryFormant", 0.0f); set("dryPitch", 0.0f); set("dryWidth", 0.5f);
     set("midiVelocity", 0.0f); set("globalSaturation", 0.04f);
     setChoice("vocalRange", 0, 6);

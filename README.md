@@ -15,7 +15,7 @@ MIRROR er en vokal-harmonizer til macOS med fire individuelle harmony voices, Ma
 - macOS
 - Xcode eller Xcode Command Line Tools
 - CMake 3.22 eller nyere
-- Internetforbindelse ved første konfigurering, da CMake henter JUCE 7.0.12
+- Internetforbindelse ved første konfigurering, da CMake henter JUCE 9.0.1
 
 Installer Command Line Tools, hvis de mangler:
 

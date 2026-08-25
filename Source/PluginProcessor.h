@@ -9,6 +9,7 @@
 #include "GrainVoice.h"
 #include "FormantTilt.h"
 #include "VoiceFilter.h"
+#include "WarmSaturator.h"
 #include "HumanizeWalker.h"
 #include "MusicalIntervals.h"
 
@@ -117,6 +118,34 @@ private:
     int delaySamples = 0;
 };
 
+
+// Stereo-linked safety stage. It preserves the stereo image when a dense
+// stack peaks, with immediate protection and a musical recovery.
+class StereoSafetyLimiter
+{
+public:
+    void prepare(double sampleRate)
+    {
+        gain = 1.0f;
+        releaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.085));
+    }
+
+    void process(float& left, float& right)
+    {
+        const float peak = juce::jmax(std::abs(left), std::abs(right));
+        const float target = peak > 0.985f ? 0.985f / peak : 1.0f;
+        if (target < gain)
+            gain = target;
+        else
+            gain += (target - gain) * releaseCoeff;
+        left *= gain;
+        right *= gain;
+    }
+
+private:
+    float gain = 1.0f, releaseCoeff = 0.002f;
+};
+
 class MirrorAudioProcessor : public juce::AudioProcessor
 {
 public:
@@ -170,12 +199,16 @@ private:
     std::array<GrainVoice, kNumHarmonyVoices> harmonyVoices;
     std::array<FormantTilt, kNumHarmonyVoices> harmonyFormant;
     std::array<VoiceFilter, kNumHarmonyVoices> harmonyFilters;
+    std::array<WarmSaturator, kNumHarmonyVoices> harmonySaturators;
+    WarmSaturator globalSaturatorL, globalSaturatorR;
+    StereoSafetyLimiter outputLimiter;
     std::array<HumanizeWalker, kNumHarmonyVoices> harmonyHumanize;
     std::array<MicroDelayLine, kNumHarmonyVoices> harmonyMicroDelay;
     std::array<float, kNumHarmonyVoices> voiceRatioSmoothed;
     std::array<float, kNumHarmonyVoices> voiceVibratoPhase;
     std::array<float, kNumHarmonyVoices> voiceLastMidi;
     int lastStableBaseMidi = 69;
+    std::uint32_t lastHandledPitchRevision = 0;
 
     SimpleAllpass ambienceApL1, ambienceApL2, ambienceApR1, ambienceApR2;
 
@@ -184,7 +217,13 @@ private:
     std::array<bool, 128> physicalKeys {};
     int numHeldNotes = 0;
     bool sustainPedalDown = false;
+    std::array<int, kNumHarmonyVoices> midiAssignedNotes {};
+    std::array<float, kNumHarmonyVoices> midiAssignedVelocities {};
+    std::array<float, kNumHarmonyVoices> midiAssignedFrequencies {};
+    bool midiAssignmentsDirty = true;
+    int lastMidiVoicing = -1, lastMidiInversion = -1;
     void removeHeldNote(int note);
+    void rebuildMidiAssignments(int midiVoicing, int midiInversion);
     void handleMidiMessage(const juce::MidiMessage& m);
 
     float frozenLeadRatio = 1.0f;

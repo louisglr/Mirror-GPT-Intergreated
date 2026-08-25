@@ -5,46 +5,43 @@
 #include <cmath>
 #include <juce_core/juce_core.h>
 
-// A YIN detector running at half the host sample rate.  Vocal fundamentals
-// are far below the reduced Nyquist frequency, while the longer effective
-// analysis window gives bass/baritone voices enough period length without
-// increasing sustained CPU load.
+// YIN analysis runs close to 24 kHz, independent of the host sample rate.
+// A two-pole anti-alias filter before decimation and a fixed 10 ms analysis
+// cadence keep tracking consistent at 44.1, 48, 88.2 and 96 kHz.
 class PitchDetector
 {
 public:
     void prepare(double inputSampleRate)
     {
-        sourceSampleRate = inputSampleRate;
-        // Keep the analysis rate near 24 kHz at every host rate. This
-        // preserves the full bass period range at 88.2/96 kHz while keeping
-        // detector CPU predictable.
         decimationFactor = juce::jmax(1, (int) std::ceil(inputSampleRate / 24000.0));
         analysisSampleRate = inputSampleRate / (double) decimationFactor;
         windowSize = 1024;
         maxLag = windowSize / 2;
-        hopSize = juce::jmax(1, (int) std::round(384.0 / (double) decimationFactor));
+        hopSize = juce::jmax(1, (int) std::round(analysisSampleRate * 0.010));
 
         history.assign((size_t) windowSize, 0.0f);
         temp.assign((size_t) windowSize, 0.0f);
         diffFn.assign((size_t) maxLag, 0.0f);
         cmnd.assign((size_t) maxLag, 1.0f);
 
-        writePos = 0;
-        hopCounter = 0;
-        decimationPhase = 0;
-        decimationSum = 0.0f;
-        dcState = 0.0f;
-        lastFrequency = 0.0f;
-        lastConfidence = 0.0f;
+        const float antiAliasHz = juce::jmin(9000.0f, (float) analysisSampleRate * 0.38f);
+        antiAliasCoeff = 1.0f - std::exp(-juce::MathConstants<float>::twoPi
+                                         * antiAliasHz / (float) inputSampleRate);
+
+        writePos = hopCounter = decimationPhase = 0;
+        decimationSum = dcState = antiAlias1 = antiAlias2 = 0.0f;
+        lastFrequency = lastConfidence = 0.0f;
         estimateRevision = 0;
     }
 
     void pushSample(float x)
     {
-        // Removing the very slow DC component keeps the low-frequency YIN
-        // lags focused on the voice rather than microphone/room drift.
         dcState += 0.0015f * (x - dcState);
-        decimationSum += x - dcState;
+        const float dcFree = x - dcState;
+
+        antiAlias1 += antiAliasCoeff * (dcFree - antiAlias1);
+        antiAlias2 += antiAliasCoeff * (antiAlias1 - antiAlias2);
+        decimationSum += antiAlias2;
 
         if (++decimationPhase < decimationFactor)
             return;
@@ -161,8 +158,8 @@ private:
             return;
         }
 
-        // The common YIN failure on a vocal is an exact octave flip.  Correct
-        // only that narrow case; genuine wider melodic motion remains free.
+        // Correct only near-exact octave errors. Larger melodic moves remain
+        // available, while the most common vocal tracker failure is suppressed.
         if (lastFrequency > 0.0f && lastConfidence > 0.50f)
         {
             const float ratio = candidate / lastFrequency;
@@ -180,11 +177,12 @@ private:
     }
 
     std::vector<float> history, temp, diffFn, cmnd;
-    int windowSize = 1024, maxLag = 512, hopSize = 192;
+    int windowSize = 1024, maxLag = 512, hopSize = 240;
     int writePos = 0, hopCounter = 0;
     int decimationPhase = 0, decimationFactor = 2;
     float decimationSum = 0.0f, dcState = 0.0f;
-    double sourceSampleRate = 44100.0, analysisSampleRate = 22050.0;
+    float antiAlias1 = 0.0f, antiAlias2 = 0.0f, antiAliasCoeff = 0.3f;
+    double analysisSampleRate = 22050.0;
 
     float lastFrequency = 0.0f;
     float lastConfidence = 0.0f;

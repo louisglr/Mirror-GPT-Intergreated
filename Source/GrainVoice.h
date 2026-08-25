@@ -11,8 +11,9 @@
 class GrainVoice
 {
 public:
-    void prepare(double sampleRate)
+    void prepare(double sampleRateIn)
     {
+        sampleRate = sampleRateIn;
         grainSize = juce::jmax(96, (int) (sampleRate * 0.020));
         maxGrainSize = grainSize;
         hannTable.resize((size_t) maxGrainSize + 1);
@@ -36,11 +37,16 @@ public:
         return grainSize / 2;
     }
 
-    float process(const VoiceBuffer& vb, float pitchRatio, float /* sourceFrequency */)
+    float process(const VoiceBuffer& vb, float pitchRatio, float sourceFrequency)
     {
         if (!std::isfinite(pitchRatio))
             pitchRatio = 1.0f;
         pitchRatio = juce::jlimit(0.25f, 4.0f, pitchRatio);
+
+        const float safeFrequency = (std::isfinite(sourceFrequency) && sourceFrequency > 35.0f)
+            ? sourceFrequency : 180.0f;
+        const int pitchMarkRadius = juce::jlimit(8, grainSize / 2,
+            (int) std::round((float) sampleRate / safeFrequency * 0.55f));
 
         if (!initialised)
         {
@@ -48,7 +54,7 @@ public:
             {
                 const double candidate = (double) vb.getWriteHead()
                     - (double) (grainSize - age[i]) * (double) pitchRatio - 3.0;
-                pos[i] = vb.findNearestRisingZeroCrossing(candidate, grainSize / 5);
+                pos[i] = vb.findNearestRisingZeroCrossing(candidate, pitchMarkRadius);
             }
             initialised = true;
         }
@@ -60,7 +66,7 @@ public:
             {
                 const double lookback = (double) grainSize * (double) pitchRatio + 3.0;
                 const double candidate = (double) vb.getWriteHead() - lookback;
-                pos[i] = vb.findNearestRisingZeroCrossing(candidate, grainSize / 5);
+                pos[i] = vb.findNearestRisingZeroCrossing(candidate, pitchMarkRadius);
             }
 
             const float sample = vb.readInterpolated(pos[i]);
@@ -83,6 +89,7 @@ private:
     }
 
     static constexpr int kNumGrains = 4;
+    double sampleRate = 44100.0;
     int grainSize = 882;
     int maxGrainSize = 882;
     int age[kNumGrains] = { 0, 0, 0, 0 };

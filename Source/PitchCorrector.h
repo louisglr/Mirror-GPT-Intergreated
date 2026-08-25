@@ -3,9 +3,9 @@
 #include <cmath>
 #include <juce_core/juce_core.h>
 
-// Scale-aware pitch correction with sample-rate independent transitions.
-// Controls are expressed as musical time constants, preventing detector
-// updates from becoming zipper-like at small audio buffers.
+// Scale-aware correction with time-based transitions.  Scale quantisation is
+// recomputed only on a new pitch estimate or a musical parameter change; the
+// audio thread then only performs the smooth interpolation.
 class PitchCorrector
 {
 public:
@@ -17,8 +17,11 @@ public:
     void prepare(double sampleRateIn)
     {
         sampleRate = sampleRateIn;
-        smoothedRatio = 1.0f;
+        smoothedRatio = targetRatio = 1.0f;
         lastTracking = -1.0f;
+        lastDetectedFreq = -1.0f;
+        lastRootNote = -1;
+        lastScaleType = -1;
         smoothingCoeff = 0.01f;
         neutralReleaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.090));
     }
@@ -39,8 +42,15 @@ public:
             return smoothedRatio;
         }
 
-        const float targetFreq = nearestScaleFreq(detectedFreq, rootNote, scaleType);
-        const float targetRatio = targetFreq / detectedFreq;
+        if (std::abs(detectedFreq - lastDetectedFreq) > 1.0e-5f
+            || rootNote != lastRootNote || scaleType != lastScaleType)
+        {
+            targetRatio = nearestScaleFreq(detectedFreq, rootNote, scaleType) / detectedFreq;
+            lastDetectedFreq = detectedFreq;
+            lastRootNote = rootNote;
+            lastScaleType = scaleType;
+        }
+
         smoothedRatio += (targetRatio - smoothedRatio) * smoothingCoeff;
         return smoothedRatio;
     }
@@ -77,7 +87,7 @@ public:
 
     static float midiToFreq(int midiNote)
     {
-        return 440.0f * std::pow(2.0f, (float) (midiNote - 69) / 12.0f);
+        return 440.0f * std::exp2((float) (midiNote - 69) / 12.0f);
     }
 
 private:
@@ -99,19 +109,18 @@ private:
         const int baseOctave = (int) std::floor((float) (nearestChromatic - root) / 12.0f);
 
         for (int octaveOffset = -1; octaveOffset <= 1; ++octaveOffset)
-        {
             for (int i = 0; i < 7; ++i)
             {
                 const int candidate = root + steps[i] + 12 * (baseOctave + octaveOffset);
                 const float dist = std::abs((float) candidate - midiFloat);
                 if (dist < bestDist) { bestDist = dist; best = candidate; }
             }
-        }
         return best;
     }
 
-    float smoothedRatio = 1.0f;
+    float smoothedRatio = 1.0f, targetRatio = 1.0f;
     double sampleRate = 44100.0;
-    float lastTracking = -1.0f;
+    float lastTracking = -1.0f, lastDetectedFreq = -1.0f;
+    int lastRootNote = -1, lastScaleType = -1;
     float smoothingCoeff = 0.01f, neutralReleaseCoeff = 0.001f;
 };
