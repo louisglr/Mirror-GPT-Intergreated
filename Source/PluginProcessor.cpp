@@ -199,6 +199,8 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     ambienceApR2.prepare((int) (sampleRate * 0.017), 0.45f);
 
     numHeldNotes = 0;
+    physicalKeys.fill(false);
+    sustainPedalDown = false;
     harmonyVoicing = 0.0f;
     inputEnvelope = 0.0f;
     voicingAttackCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.012));
@@ -226,58 +228,89 @@ bool MirrorAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) co
     return true;
 }
 
+void MirrorAudioProcessor::removeHeldNote(int note)
+{
+    for (int i = 0; i < numHeldNotes; ++i)
+    {
+        if (heldNotes[(size_t) i] == note)
+        {
+            for (int j = i; j < numHeldNotes - 1; ++j)
+            {
+                heldNotes[(size_t) j] = heldNotes[(size_t) (j + 1)];
+                heldNoteVelocities[(size_t) j] = heldNoteVelocities[(size_t) (j + 1)];
+            }
+            --numHeldNotes;
+            return;
+        }
+    }
+}
+
 void MirrorAudioProcessor::handleMidiMessage(const juce::MidiMessage& m)
 {
     if (m.isNoteOn())
     {
-        int note = m.getNoteNumber();
-        bool alreadyHeld = false;
-        for (int i = 0; i < numHeldNotes; ++i)
-            if (heldNotes[(size_t) i] == note) { alreadyHeld = true; break; }
+        const int note = juce::jlimit(0, 127, m.getNoteNumber());
+        physicalKeys[(size_t) note] = true;
 
-        if (!alreadyHeld && numHeldNotes < kMaxHeldNotes)
-        {
-            int insertAt = numHeldNotes;
-            while (insertAt > 0 && heldNotes[(size_t) (insertAt - 1)] > note)
-            {
-                heldNotes[(size_t) insertAt] = heldNotes[(size_t) (insertAt - 1)];
-                heldNoteVelocities[(size_t) insertAt] = heldNoteVelocities[(size_t) (insertAt - 1)];
-                --insertAt;
-            }
-            heldNotes[(size_t) insertAt] = note;
-            heldNoteVelocities[(size_t) insertAt] = m.getFloatVelocity();
-            ++numHeldNotes;
-        }
-    }
-    else if (m.isNoteOff() || (m.isNoteOn() && m.getVelocity() == 0))
-    {
-        int note = m.getNoteNumber();
         for (int i = 0; i < numHeldNotes; ++i)
         {
             if (heldNotes[(size_t) i] == note)
             {
-                for (int j = i; j < numHeldNotes - 1; ++j)
-                {
-                    heldNotes[(size_t) j] = heldNotes[(size_t) (j + 1)];
-                    heldNoteVelocities[(size_t) j] = heldNoteVelocities[(size_t) (j + 1)];
-                }
-                --numHeldNotes;
-                break;
+                heldNoteVelocities[(size_t) i] = m.getFloatVelocity();
+                return;
             }
         }
+
+        if (numHeldNotes >= kMaxHeldNotes)
+            return;
+
+        int insertAt = numHeldNotes;
+        while (insertAt > 0 && heldNotes[(size_t) (insertAt - 1)] > note)
+        {
+            heldNotes[(size_t) insertAt] = heldNotes[(size_t) (insertAt - 1)];
+            heldNoteVelocities[(size_t) insertAt] = heldNoteVelocities[(size_t) (insertAt - 1)];
+            --insertAt;
+        }
+        heldNotes[(size_t) insertAt] = note;
+        heldNoteVelocities[(size_t) insertAt] = m.getFloatVelocity();
+        ++numHeldNotes;
+        return;
     }
-    else if (m.isAllNotesOff() || m.isAllSoundOff())
+
+    if (m.isNoteOff())
+    {
+        const int note = juce::jlimit(0, 127, m.getNoteNumber());
+        physicalKeys[(size_t) note] = false;
+        if (!sustainPedalDown)
+            removeHeldNote(note);
+        return;
+    }
+
+    if (m.isController() && m.getControllerNumber() == 64)
+    {
+        const bool nextSustainState = m.getControllerValue() >= 64;
+        if (sustainPedalDown && !nextSustainState)
+        {
+            // Releasing the pedal lets go only of keys that are physically up.
+            for (int i = numHeldNotes - 1; i >= 0; --i)
+                if (!physicalKeys[(size_t) heldNotes[(size_t) i]])
+                    removeHeldNote(heldNotes[(size_t) i]);
+        }
+        sustainPedalDown = nextSustainState;
+        return;
+    }
+
+    if (m.isAllNotesOff() || m.isAllSoundOff())
     {
         numHeldNotes = 0;
+        physicalKeys.fill(false);
+        sustainPedalDown = false;
     }
 }
 
 void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
-
-    for (const auto metadata : midiMessages)
-        handleMidiMessage(metadata.getMessage());
 
     const int numSamples = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2)
@@ -361,8 +394,18 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     auto* channelL = buffer.getWritePointer(0);
     auto* channelR = buffer.getWritePointer(1);
 
+    // Processing messages at their actual sample position keeps MIDI-triggered
+    // chord changes tight even at large DAW buffer sizes.
+    auto midiEvent = midiMessages.begin();
+    const auto midiEnd = midiMessages.end();
+
     for (int n = 0; n < numSamples; ++n)
     {
+        while (midiEvent != midiEnd && (*midiEvent).samplePosition <= n)
+        {
+            handleMidiMessage((*midiEvent).getMessage());
+            ++midiEvent;
+        }
         float dryL = channelL[n];
         float dryR = channelR[n];
         float monoIn = 0.5f * (dryL + dryR);

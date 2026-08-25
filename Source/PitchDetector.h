@@ -15,10 +15,14 @@ public:
     void prepare(double inputSampleRate)
     {
         sourceSampleRate = inputSampleRate;
-        analysisSampleRate = inputSampleRate * 0.5;
+        // Keep the analysis rate near 24 kHz at every host rate. This
+        // preserves the full bass period range at 88.2/96 kHz while keeping
+        // detector CPU predictable.
+        decimationFactor = juce::jmax(1, (int) std::ceil(inputSampleRate / 24000.0));
+        analysisSampleRate = inputSampleRate / (double) decimationFactor;
         windowSize = 1024;
         maxLag = windowSize / 2;
-        hopSize = 192; // 192 analysis samples = 384 host samples
+        hopSize = juce::jmax(1, (int) std::round(384.0 / (double) decimationFactor));
 
         history.assign((size_t) windowSize, 0.0f);
         temp.assign((size_t) windowSize, 0.0f);
@@ -42,10 +46,10 @@ public:
         dcState += 0.0015f * (x - dcState);
         decimationSum += x - dcState;
 
-        if (++decimationPhase < 2)
+        if (++decimationPhase < decimationFactor)
             return;
 
-        const float analysisSample = decimationSum * 0.5f;
+        const float analysisSample = decimationSum / (float) decimationFactor;
         decimationSum = 0.0f;
         decimationPhase = 0;
 
@@ -178,7 +182,7 @@ private:
     std::vector<float> history, temp, diffFn, cmnd;
     int windowSize = 1024, maxLag = 512, hopSize = 192;
     int writePos = 0, hopCounter = 0;
-    int decimationPhase = 0;
+    int decimationPhase = 0, decimationFactor = 2;
     float decimationSum = 0.0f, dcState = 0.0f;
     double sourceSampleRate = 44100.0, analysisSampleRate = 22050.0;
 

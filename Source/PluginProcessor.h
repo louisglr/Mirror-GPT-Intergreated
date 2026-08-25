@@ -181,7 +181,10 @@ private:
 
     std::array<int, kMaxHeldNotes> heldNotes {};
     std::array<float, kMaxHeldNotes> heldNoteVelocities {};
+    std::array<bool, 128> physicalKeys {};
     int numHeldNotes = 0;
+    bool sustainPedalDown = false;
+    void removeHeldNote(int note);
     void handleMidiMessage(const juce::MidiMessage& m);
 
     float frozenLeadRatio = 1.0f;
