@@ -9,7 +9,8 @@ include(FetchContent)
 FetchContent_Declare(
     JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        7.0.12
+    # JUCE 9 supports the current macOS/Xcode SDK used by GitHub Actions.
+    GIT_TAG        9.0.1
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(JUCE)
