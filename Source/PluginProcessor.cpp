@@ -230,7 +230,7 @@ void MirrorAudioProcessor::releaseResources() {}
 bool MirrorAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     const auto input = layouts.getMainInputChannelSet();
-    if (!input.isMono() && !input.isStereo())
+    if (input != juce::AudioChannelSet::mono() && input != juce::AudioChannelSet::stereo())
         return false;
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
@@ -671,7 +671,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             raw *= (1.0f + hz.ampMod);
             if (mode == 1)
             {
-                const float velocityGain = 0.35f + 0.65f * assignedMidiVelocity[(size_t) i];
+                const float velocityGain = 0.35f + 0.65f * midiAssignedVelocities[(size_t) i];
                 raw *= 1.0f + midiVelocitySensitivity * (velocityGain - 1.0f);
             }
 
