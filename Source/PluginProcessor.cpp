@@ -171,13 +171,20 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     pitchCorrector.prepare(sampleRate);
 
     dryVoice.prepare(sampleRate);
-    dryFormantProcL = FormantTilt();
-    dryFormantProcR = FormantTilt();
+    reportedLatencySamples = dryVoice.getLatencySamples();
+    dryAlignmentL.prepare(reportedLatencySamples + 8);
+    dryAlignmentR.prepare(reportedLatencySamples + 8);
+    dryAlignmentL.setDelaySamples(reportedLatencySamples);
+    dryAlignmentR.setDelaySamples(reportedLatencySamples);
+    setLatencySamples(reportedLatencySamples);
+
+    dryFormantProcL.prepare(sampleRate);
+    dryFormantProcR.prepare(sampleRate);
 
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
         harmonyVoices[(size_t) i].prepare(sampleRate);
-        harmonyFormant[(size_t) i] = FormantTilt();
+        harmonyFormant[(size_t) i].prepare(sampleRate);
         harmonyFilters[(size_t) i].prepare(sampleRate);
         harmonyHumanize[(size_t) i].prepare(sampleRate, 1000 + i * 137);
         harmonyMicroDelay[(size_t) i].prepare(sampleRate);
@@ -193,6 +200,9 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
 
     numHeldNotes = 0;
     harmonyVoicing = 0.0f;
+    inputEnvelope = 0.0f;
+    voicingAttackCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.012));
+    voicingReleaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.065));
 
     dryLevelSmoothed.reset(sampleRate, 0.03);
     harmonyLevelSmoothed.reset(sampleRate, 0.03);
@@ -345,7 +355,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         if (vp[(size_t) i].solo) anySolo = true;
     }
 
-    float glideCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, glide), 0.0f, 1.0f, 0.4f, 0.0015f);
+    const float glideTimeMs = juce::jmap(juce::jlimit(0.0f, 1.0f, glide), 8.0f, 155.0f);
+    const float glideCoeff = 1.0f - std::exp(-1.0f / (float) (currentSampleRate * glideTimeMs * 0.001));
 
     auto* channelL = buffer.getWritePointer(0);
     auto* channelR = buffer.getWritePointer(1);
@@ -358,6 +369,10 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
 
         voiceBuffer.write(monoIn);
         pitchDetector.pushSample(monoIn);
+
+        const float inputMagnitude = std::abs(monoIn);
+        const float inputEnvelopeCoeff = inputMagnitude > inputEnvelope ? 0.08f : 0.0015f;
+        inputEnvelope += (inputMagnitude - inputEnvelope) * inputEnvelopeCoeff;
 
         float detectedFreq = pitchDetector.getFrequency();
         float confidence = pitchDetector.getConfidence();
@@ -376,8 +391,12 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float dryProcL, dryProcR;
         if (std::abs(dryPitchSemis) < 0.001f)
         {
-            dryProcL = dryL;
-            dryProcR = dryR;
+            // The harmony grains are centred half a grain in the past.  Delay
+            // the unshifted lead by that same amount and report it to the DAW:
+            // dry and harmony lock together, while plug-in delay compensation
+            // keeps the track aligned with the session.
+            dryProcL = dryAlignmentL.process(dryL);
+            dryProcR = dryAlignmentR.process(dryR);
         }
         else
         {
@@ -397,12 +416,15 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             dryProcR = dryFormantProcR.process(dryProcR, dryFormantAmount);
         }
 
-        // YIN confidence is a useful voiced/unvoiced detector.  Fading the
-        // harmony bus around weakly pitched material avoids the metallic,
-        // bubbling quality granular shifters otherwise create on breaths,
-        // sibilants and room noise.  The slower release preserves legato.
-        const float voicingTarget = confidence > 0.40f ? 1.0f : 0.0f;
-        const float voicingCoeff = voicingTarget > harmonyVoicing ? 0.008f : 0.001f;
+        // A continuous pitch-and-level confidence gate avoids both the
+        // metallic breath artefacts of a fully wet granular voice and the
+        // obvious on/off edge of a binary voicing threshold.
+        const float pitchGate = juce::jlimit(0.0f, 1.0f, (confidence - 0.25f) / 0.33f);
+        const float smoothPitchGate = pitchGate * pitchGate * (3.0f - 2.0f * pitchGate);
+        const float levelGate = juce::jlimit(0.0f, 1.0f, (inputEnvelope - 0.0008f) / 0.0072f);
+        const float voicingTarget = smoothPitchGate * levelGate;
+        const float voicingCoeff = voicingTarget > harmonyVoicing
+            ? voicingAttackCoeff : voicingReleaseCoeff;
         harmonyVoicing += (voicingTarget - harmonyVoicing) * voicingCoeff;
 
         float dryWidthNow = dryWidthSmoothed.getNextValue() * 2.0f;
@@ -571,9 +593,12 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             // Zero saturation must be transparent.  The previous code ran
             // tanh even at zero, which coloured every voice unnecessarily.
             const float sat = vp[(size_t) i].saturation;
-            const float drive = 1.0f + sat * 0.8f;
-            const float saturated = std::tanh(raw * drive) / std::tanh(drive);
-            raw += (saturated - raw) * sat;
+            if (sat > 1.0e-5f)
+            {
+                const float drive = 1.0f + sat * 0.8f;
+                const float saturated = std::tanh(raw * drive) / std::tanh(drive);
+                raw += (saturated - raw) * sat;
+            }
 
             raw *= (1.0f + hz.ampMod);
             if (mode == 1)
@@ -613,11 +638,14 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float outL = dryOutL * dryNow + wetL;
         float outR = dryOutR * dryNow + wetR;
 
-        const float saturationDrive = 1.0f + globalSaturation * 0.6f;
-        const float saturatedL = std::tanh(outL * saturationDrive) / std::tanh(saturationDrive);
-        const float saturatedR = std::tanh(outR * saturationDrive) / std::tanh(saturationDrive);
-        outL += (saturatedL - outL) * globalSaturation;
-        outR += (saturatedR - outR) * globalSaturation;
+        if (globalSaturation > 1.0e-5f)
+        {
+            const float saturationDrive = 1.0f + globalSaturation * 0.6f;
+            const float saturatedL = std::tanh(outL * saturationDrive) / std::tanh(saturationDrive);
+            const float saturatedR = std::tanh(outR * saturationDrive) / std::tanh(saturationDrive);
+            outL += (saturatedL - outL) * globalSaturation;
+            outR += (saturatedR - outR) * globalSaturation;
+        }
         // A single invalid sample can otherwise persist in recursive filters
         // and present itself as crackle after a long session.
         if (!std::isfinite(outL)) outL = 0.0f;

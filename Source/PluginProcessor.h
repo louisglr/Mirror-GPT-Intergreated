@@ -81,6 +81,42 @@ private:
     float coeff = 0.5f;
 };
 
+
+// Fixed integer delay for dry-path alignment.  It never resizes or allocates
+// while processing, so enabling the high-quality harmony engine remains
+// real-time safe.
+class SampleAlignmentDelay
+{
+public:
+    void prepare(int maximumDelaySamples)
+    {
+        buffer.assign((size_t) juce::jmax(2, maximumDelaySamples + 2), 0.0f);
+        writePosition = 0;
+        delaySamples = 0;
+    }
+
+    void setDelaySamples(int samples)
+    {
+        delaySamples = juce::jlimit(0, (int) buffer.size() - 1, samples);
+    }
+
+    float process(float input)
+    {
+        buffer[(size_t) writePosition] = input;
+        int readPosition = writePosition - delaySamples;
+        if (readPosition < 0)
+            readPosition += (int) buffer.size();
+        const float output = buffer[(size_t) readPosition];
+        writePosition = (writePosition + 1) % (int) buffer.size();
+        return output;
+    }
+
+private:
+    std::vector<float> buffer;
+    int writePosition = 0;
+    int delaySamples = 0;
+};
+
 class MirrorAudioProcessor : public juce::AudioProcessor
 {
 public:
@@ -100,6 +136,7 @@ public:
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.1; }
+    int getLatencySamples() const override { return reportedLatencySamples; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -126,6 +163,7 @@ private:
     PitchCorrector pitchCorrector;
 
     GrainVoice dryVoice;
+    SampleAlignmentDelay dryAlignmentL, dryAlignmentR;
     // Formant filtering needs independent state per channel; sharing one
     // filter state made an active dry formant control collapse stereo to mono.
     FormantTilt dryFormantProcL, dryFormantProcR;
@@ -148,9 +186,12 @@ private:
     void handleMidiMessage(const juce::MidiMessage& m);
 
     float frozenLeadRatio = 1.0f;
-    // A short, smooth voicing gate keeps pitch-shift artefacts from noise and
-    // unvoiced consonants out of the harmony bus without chopping phrases.
+    // Adaptive, confidence-weighted voicing fades generated material in and
+    // out instead of hard-switching around breaths and consonants.
     float harmonyVoicing = 0.0f;
+    float inputEnvelope = 0.0f;
+    float voicingAttackCoeff = 0.01f, voicingReleaseCoeff = 0.001f;
+    int reportedLatencySamples = 0;
 
     juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed;
     std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceLevelSmoothed, voicePanSmoothed;

@@ -3,22 +3,48 @@
 #include <cmath>
 #include <juce_core/juce_core.h>
 
-// Simpel spektral tilt-kontrol der bruges som en praktisk "FORMANT"-knap.
-// Dette er IKKE ægte formant-forskydning (det ville kræve LPC/cepstral
-// analyse af taleorganets resonanser) - det er en tilt-EQ der gør stemmen
-// lysere/tyndere (positivt) eller mørkere/fyldigere (negativt), hvilket
-// perceptuelt minder om hævede/sænkede formanter, men er en tilnærmelse.
+// A sample-rate-aware three-band spectral tilt.  It is intentionally gentle:
+// upward shifts retain articulation without becoming brittle, while downward
+// shifts keep body without a boxy low-mid buildup.
 class FormantTilt
 {
 public:
+    void prepare(double sampleRateIn)
+    {
+        sampleRate = sampleRateIn;
+        lowCoeff = coefficientForHz(650.0f);
+        midCoeff = coefficientForHz(2800.0f);
+        reset();
+    }
+
+    void reset()
+    {
+        lowState = 0.0f;
+        midState = 0.0f;
+    }
+
     float process(float x, float amount)
     {
-        lp += 0.06f * (x - lp);
-        float hp = x - lp;
-        float a = juce::jlimit(-1.0f, 1.0f, amount);
-        return lp * (1.0f - 0.5f * a) + hp * (1.0f + 0.5f * a);
+        lowState += lowCoeff * (x - lowState);
+        midState += midCoeff * (x - midState);
+
+        const float low = lowState;
+        const float mid = midState - lowState;
+        const float high = x - midState;
+        const float a = juce::jlimit(-1.0f, 1.0f, amount);
+
+        return low * (1.0f - 0.34f * a)
+             + mid * (1.0f - 0.06f * a)
+             + high * (1.0f + 0.42f * a);
     }
 
 private:
-    float lp = 0.0f;
+    float coefficientForHz(float hz) const
+    {
+        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / (float) sampleRate);
+    }
+
+    double sampleRate = 44100.0;
+    float lowCoeff = 0.08f, midCoeff = 0.32f;
+    float lowState = 0.0f, midState = 0.0f;
 };
