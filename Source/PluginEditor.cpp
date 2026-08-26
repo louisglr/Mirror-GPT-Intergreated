@@ -219,7 +219,9 @@ namespace
         void drawComboBox(juce::Graphics& g, int width, int height, bool isDown,
                           int, int, int, int, juce::ComboBox& box) override
         {
-            if (isReferenceOverlay(box))
+            // At the reference defaults the supplied artwork is the exact
+            // control face. Once a selection differs, draw a live face over it.
+            if (isReferenceOverlay(box) && box.getAlpha() < 0.01f)
                 return;
 
             const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height).reduced(1.0f);
@@ -397,14 +399,38 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     // a chosen preset is still shown normally afterwards.
     presetBox.setTextWhenNothingSelected(juce::String());
     presetBox.setSelectedId(0, juce::dontSendNotification);
-    presetBox.onChange = [this] { applyPreset(presetBox.getSelectedId()); };
+    presetBox.onChange = nullptr;
     configureLabel(presetLabel, "PЯESET", 11.0f, false);
     addAndMakeVisible(presetLabel);
 
-    // Exact artwork handles the static chrome; these remain transparent
-    // hit targets with live values and menus on top.
+    // Exact artwork handles the default chrome and typography. Controls stay
+    // transparent at their reference values, then become live faces as soon
+    // as the user chooses a different value.
     for (auto* box : { &modeBox, &rootBox, &scaleBox, &presetBox })
         box->setComponentID("reference-overlay");
+
+    const auto syncReferenceCombo = [](juce::ComboBox& box, const juce::String& referenceText)
+    {
+        box.setAlpha(box.getText() == referenceText ? 0.0f : 1.0f);
+    };
+    modeBox.onChange = [this, syncReferenceCombo]
+    {
+        syncReferenceCombo(modeBox, "Manual");
+        updateControlVisibility();
+        resized();
+        repaint();
+    };
+    rootBox.onChange = [syncReferenceCombo] { syncReferenceCombo(rootBox, "C"); };
+    scaleBox.onChange = [syncReferenceCombo] { syncReferenceCombo(scaleBox, "Major"); };
+    presetBox.onChange = [this, syncReferenceCombo]
+    {
+        syncReferenceCombo(presetBox, juce::String());
+        applyPreset(presetBox.getSelectedId());
+    };
+    syncReferenceCombo(modeBox, "Manual");
+    syncReferenceCombo(rootBox, "C");
+    syncReferenceCombo(scaleBox, "Major");
+    syncReferenceCombo(presetBox, juce::String());
 
     setupKnob(trackingKnob, "tracking", "TЯACKING");
     setupKnob(glideKnob, "glide", "TЯANSITION");
@@ -433,7 +459,6 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     setupKnob(globalSaturationKnob, "globalSaturation", "GLUE");
     setupKnob(outputGainKnob, "outputGain", "GAIN");
 
-    modeBox.onChange = [this] { updateControlVisibility(); resized(); repaint(); };
     mainPageButton.setToggleState(true, juce::dontSendNotification);
     setSize(1723, 913);
     updateControlVisibility();
