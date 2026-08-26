@@ -930,8 +930,19 @@ void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int>)
 
 void MirrorAudioProcessorEditor::timerCallback()
 {
-    // Mode can be automated from the host; refresh the page state without
+    // Keep host automation in sync with the static default artwork without
     // polling meters or repainting the full 6 MB reference canvas every frame.
+    const auto syncReferenceCombo = [](juce::ComboBox& box, const juce::String& referenceText)
+    {
+        const float targetAlpha = box.getText() == referenceText ? 0.0f : 1.0f;
+        if (box.getAlpha() != targetAlpha)
+            box.setAlpha(targetAlpha);
+    };
+    syncReferenceCombo(modeBox, "Manual");
+    syncReferenceCombo(rootBox, "C");
+    syncReferenceCombo(scaleBox, "Major");
+    syncReferenceCombo(presetBox, juce::String());
+
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
     if (mode != lastMode)
     {
