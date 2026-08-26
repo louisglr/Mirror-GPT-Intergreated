@@ -870,7 +870,7 @@ void MirrorAudioProcessorEditor::drawPanel(juce::Graphics& g, juce::Rectangle<fl
     const auto crest = juce::Point<float>(b.getCentreX(), b.getY() + 17.0f);
     g.setColour(kGold.withAlpha(0.63f * alpha));
     g.drawEllipse(crest.x - 11.0f, crest.y - 11.0f, 22.0f, 22.0f, 0.8f);
-    g.drawEllipse(crest.x - 6.0f, crest.y - 6.0f, 12.0f, 0.5f);
+    g.drawEllipse(crest.x - 6.0f, crest.y - 6.0f, 12.0f, 12.0f, 0.5f);
     for (int ray = 0; ray < 8; ++ray)
     {
         const float a = juce::MathConstants<float>::twoPi * (float) ray / 8.0f;
@@ -909,9 +909,9 @@ void MirrorAudioProcessorEditor::drawVoiceGlyph(juce::Graphics& g, int voiceInde
 
     for (int ring = 0; ring < 3; ++ring)
     {
-        const float width = 42.0f + ring * 19.0f + energy * 24.0f;
-        const float h = 8.0f + ring * 4.0f;
-        g.setColour((ring == 0 ? kGold : kPurple).withAlpha(alpha * (0.36f - ring * 0.07f)));
+        const float width = 42.0f + static_cast<float>(ring) * 19.0f + energy * 24.0f;
+        const float h = 8.0f + static_cast<float>(ring) * 4.0f;
+        g.setColour((ring == 0 ? kGold : kPurple).withAlpha(alpha * (0.36f - static_cast<float>(ring) * 0.07f)));
         g.drawEllipse(x - width * 0.5f, groundY - h * 0.5f, width, h, 0.8f);
     }
 
