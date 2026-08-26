@@ -504,6 +504,9 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     auto midiEvent = midiMessages.begin();
     const auto midiEnd = midiMessages.end();
 
+    // UI telemetry is accumulated for the full block and published once.
+    std::array<float, kNumHarmonyVoices> visualVoicePeaks {};
+
     for (int n = 0; n < numSamples; ++n)
     {
         while (midiEvent != midiEnd && (*midiEvent).samplePosition <= n)
@@ -587,8 +590,6 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float dryOutR = widenedR * std::sin(dryPanPos) * 1.4142f;
 
         float harmonySumL = 0.0f, harmonySumR = 0.0f;
-    // Peak values are UI telemetry only. They are block-rate and do not alter audio.
-    std::array<float, kNumHarmonyVoices> visualVoicePeaks {};
 
         const auto pitchRevision = pitchDetector.getRevision();
         if (pitchRevision != lastHandledPitchRevision)
