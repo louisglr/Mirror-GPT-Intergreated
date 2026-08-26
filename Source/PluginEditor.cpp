@@ -471,7 +471,7 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
     setChoice("scaleType", 1, 3);
     set("freeze", 0.0f);
     set("dryPan", 0.0f); set("dryFormant", 0.0f); set("dryPitch", 0.0f); set("dryWidth", 0.5f);
-    set("midiVelocity", 0.0f); set("globalSaturation", 0.04f);
+    set("midiVelocity", 0.0f); set("globalSaturation", 0.04f); set("outputGain", 0.0f);
     setChoice("vocalRange", 0, 6);
     setChoice("harmonyStyle", 1, 4);
     setChoice("midiVoicing", 1, 3);
