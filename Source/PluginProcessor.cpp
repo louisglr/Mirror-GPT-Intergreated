@@ -79,7 +79,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     addBipolar("dryPan", "Dry Pan", 0.0f);
     addBipolar("dryFormant", "Dry Formant", 0.0f);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f, "st"));
+        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("st"));
     add01("dryWidth", "Dry Width", 0.5f);
 
     // --- HARMONY (4 stemmer) ---
@@ -124,7 +124,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceFineTune" + idx, 1 }, "Voice " + idx + " Fine Tune",
-            Range(-50.0f, 50.0f, 0.1f), 0.0f, "cents"));
+            Range(-50.0f, 50.0f, 0.1f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("cents"));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceTone" + idx, 1 }, "Voice " + idx + " Tone",
@@ -136,7 +136,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceMicroDelay" + idx, 1 }, "Voice " + idx + " Micro Delay",
-            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i], "ms"));
+            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i], juce::AudioParameterFloatAttributes().withLabel("ms"));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceVibrato" + idx, 1 }, "Voice " + idx + " Vibrato",
@@ -160,7 +160,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     add01("globalSaturation", "Global Saturation", 0.0f);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "outputGain", 1 }, "Output Gain",
-        Range(-18.0f, 12.0f, 0.01f), 0.0f, "dB"));
+        Range(-18.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("dB"));
 
     return { params.begin(), params.end() };
 }
@@ -571,6 +571,11 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
 
         float dryL = channelL[n];
         float dryR = inputChannels > 1 ? channelR[n] : dryL;
+        // Hosts should never pass invalid samples, but preventing one bad
+        // sample from entering the delay/grain histories avoids a persistent
+        // crackle or silence if a graph upstream is briefly unstable.
+        if (!std::isfinite(dryL)) dryL = 0.0f;
+        if (!std::isfinite(dryR)) dryR = 0.0f;
         float monoIn = 0.5f * (dryL + dryR);
 
         voiceBuffer.write(monoIn);
@@ -718,7 +723,12 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
                 readRatio *= juce::jmax(0.5f, 1.0f + vibratoCents * centsToRatio);
             }
 
-            const float sourceForGrains = mode == 1 ? lastStableInputFrequency : detectedFreq;
+            // Grain renewal must use a stable pitch-mark radius in every mode.
+            // The instantaneous detector can briefly drop or octave-jump on
+            // consonants; using it directly here was a source of the raspy,
+            // saw-like edge reported when Character/Humanize were raised.
+            const float sourceForGrains = lastStableInputFrequency > 35.0f
+                ? lastStableInputFrequency : detectedFreq;
             float raw = harmonyVoices[(size_t) i].process(voiceBuffer, readRatio, sourceForGrains);
             const float shiftSemitones = 12.0f * std::log2(juce::jmax(0.01f, readRatio));
             const float formantAmount = juce::jlimit(-1.0f, 1.0f,
@@ -726,6 +736,16 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             raw = harmonyFormant[(size_t) i].process(raw, formantAmount);
             raw = harmonySaturators[(size_t) i].process(raw, vp[(size_t) i].saturation);
             raw = harmonyFilters[(size_t) i].process(raw);
+            if (!std::isfinite(raw))
+            {
+                // Reset only the affected voice. This preserves the other
+                // harmony lines and prevents a malformed recursive state
+                // from surviving into later audio blocks.
+                harmonyFormant[(size_t) i].reset();
+                harmonySaturators[(size_t) i].reset();
+                harmonyFilters[(size_t) i].reset();
+                raw = 0.0f;
+            }
 
             raw *= (1.0f + hz.ampMod);
             if (mode == 1)
