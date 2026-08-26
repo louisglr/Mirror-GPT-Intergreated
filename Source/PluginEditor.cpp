@@ -13,15 +13,19 @@ namespace
     const juce::Colour kPurple { 0xffbd72ff };
     const juce::Colour kPurpleDim { 0xff4f276c };
 
+    // Times New Roman is present on supported macOS systems and contains the
+    // Cyrillic Я glyph.  Using the Unicode code point explicitly avoids a
+    // source-encoding/fallback-font mismatch that previously rendered a
+    // normal R on some hosts.
     juce::Font displayFont(float size, int style = juce::Font::plain)
     {
-        return juce::Font("Georgia", size, style);
+        return juce::Font("Times New Roman", size, style);
     }
 
     juce::String mirrorText(juce::String text)
     {
-        return text.replace("R", juce::String::fromUTF8("Я"))
-                   .replace("r", juce::String::fromUTF8("Я"));
+        const auto reversedR = juce::String::charToString((juce_wchar) 0x042f);
+        return text.replace("R", reversedR).replace("r", reversedR);
     }
 
     class MirrorLookAndFeel final : public juce::LookAndFeel_V4
@@ -162,12 +166,12 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     setResizable(true, true);
     setResizeLimits(980, 620, 1680, 1040);
 
-    configureLabel(titleLabel, "MIЯЯOЯ", 42.0f, false);
+    configureLabel(titleLabel, mirrorText("MIRROR"), 42.0f, false);
     titleLabel.setFont(displayFont(42.0f));
     titleLabel.setColour(juce::Label::textColourId, kText);
     addAndMakeVisible(titleLabel);
 
-    configureLabel(creditLabel, "By Lou!s GabЯ!el", 14.0f, false);
+    configureLabel(creditLabel, mirrorText("By Lou!s Gabriel"), 14.0f, false);
     creditLabel.setFont(displayFont(14.0f));
     creditLabel.setColour(juce::Label::textColourId, kTextDim);
     addAndMakeVisible(creditLabel);
@@ -179,9 +183,9 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
         button->setColour(juce::TextButton::textColourOnId, kText);
         addAndMakeVisible(button);
     }
-    mainPageButton.setButtonText("MAIN");
-    harmonyPageButton.setButtonText("HaЯmony");
-    advancedButton.setButtonText("ADVANCED");
+    mainPageButton.setButtonText("Main");
+    harmonyPageButton.setButtonText(mirrorText("Harmony"));
+    advancedButton.setButtonText("Advanced");
     mainPageButton.setRadioGroupId(8001);
     harmonyPageButton.setRadioGroupId(8001);
     mainPageButton.onClick = [this] { showPage(0); };
@@ -189,6 +193,9 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     advancedButton.onClick = [this]
     {
         showAdvanced = advancedButton.getToggleState();
+        // This must run before layout: Advanced controls are deliberately
+        // hidden on the simple page and were otherwise never revealed.
+        updateControlVisibility();
         resized();
         repaint();
     };
@@ -487,10 +494,13 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
 
     advancedButton.setVisible(harmony);
-    vocalRangeBox.setVisible(true);
-    vocalRangeLabel.setVisible(true);
-    harmonyStyleBox.setVisible(true);
-    harmonyStyleLabel.setVisible(true);
+    // The visual design keeps the header as sparse as the reference panels.
+    // These remain fully automatable host parameters rather than competing
+    // with the Key/Scale/MIDI controls in the compact front panel.
+    vocalRangeBox.setVisible(false);
+    vocalRangeLabel.setVisible(false);
+    harmonyStyleBox.setVisible(false);
+    harmonyStyleLabel.setVisible(false);
     midiVoicingBox.setVisible(mode == 1);
     midiVoicingLabel.setVisible(mode == 1);
     midiInversionBox.setVisible(mode == 1);
@@ -511,8 +521,10 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     {
         column.title.setVisible(harmony);
         column.enableButton.setVisible(harmony);
-        column.soloButton.setVisible(harmony);
-        column.intervalBox.setVisible(harmony);
+        // Solo and interval stay exposed to the DAW for automation, but the
+        // front page follows the reference: one clean On switch per voice.
+        column.soloButton.setVisible(false);
+        column.intervalBox.setVisible(false);
         for (auto* component : { (juce::Component*) &column.levelSlider, (juce::Component*) &column.levelLabel,
                                  (juce::Component*) &column.panSlider, (juce::Component*) &column.panLabel,
                                  (juce::Component*) &column.formantSlider, (juce::Component*) &column.formantLabel })
@@ -543,11 +555,13 @@ void MirrorAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds().reduced(24);
     const int width = getWidth();
+    const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
 
-    titleLabel.setBounds(0, 23, juce::jmin(305, width / 3), 58);
-    creditLabel.setBounds(4, 82, 280, 24);
-    presetLabel.setBounds(5, 118, 85, 18);
-    presetBox.setBounds(5, 137, 190, 33);
+    // Header: deliberately matched to the three supplied references.
+    titleLabel.setBounds(12, 22, juce::jmin(305, width / 3), 58);
+    creditLabel.setBounds(16, 80, 280, 24);
+    presetLabel.setBounds(16, 119, 90, 18);
+    presetBox.setBounds(16, 140, 190, 33);
 
     const int controlW = 170;
     const int modeX = width / 2 - controlW / 2;
@@ -561,20 +575,26 @@ void MirrorAudioProcessorEditor::resized()
 
     mainPageButton.setBounds(width / 2 - 170, 92, 168, 36);
     harmonyPageButton.setBounds(width / 2 + 2, 92, 168, 36);
-    advancedButton.setBounds(width / 2 - 85, 133, 170, 31);
 
-    const int compactY = 142;
-    vocalRangeLabel.setBounds(width - 314, 112, 116, 16);
-    vocalRangeBox.setBounds(width - 314, 128, 116, 27);
-    harmonyStyleLabel.setBounds(width - 184, 112, 150, 16);
-    harmonyStyleBox.setBounds(width - 184, 128, 150, 27);
-    midiVoicingLabel.setBounds(modeX - 96, 142, 92, 16);
-    midiVoicingBox.setBounds(modeX - 96, 158, 92, 27);
-    midiInversionLabel.setBounds(modeX + controlW + 4, 142, 92, 16);
-    midiInversionBox.setBounds(modeX + controlW + 4, 158, 92, 27);
-    juce::ignoreUnused(compactY);
+    // The Manual front page stays visually identical to the mockup. Selecting
+    // MIDI exposes only the two meaningful chord controls, without overlap.
+    const int midiY = 137;
+    midiVoicingLabel.setBounds(modeX - 104, midiY, 98, 16);
+    midiVoicingBox.setBounds(modeX - 104, midiY + 16, 98, 27);
+    midiInversionLabel.setBounds(modeX + controlW + 6, midiY, 98, 16);
+    midiInversionBox.setBounds(modeX + controlW + 6, midiY + 16, 98, 27);
 
-    auto body = area.withTop(180).reduced(0, 4);
+    const int advancedY = midiMode ? 184 : 133;
+    advancedButton.setBounds(width / 2 - 85, advancedY, 170, 31);
+
+    // Retained host parameters have no front-panel bounds by design.
+    vocalRangeLabel.setBounds(0, -30, 1, 1);
+    vocalRangeBox.setBounds(0, -30, 1, 1);
+    harmonyStyleLabel.setBounds(0, -30, 1, 1);
+    harmonyStyleBox.setBounds(0, -30, 1, 1);
+
+    int bodyTop = midiMode ? (currentPage == 1 ? 224 : 198) : 180;
+    auto body = area.withTop(bodyTop).reduced(0, 4);
     if (currentPage == 0)
         layoutMain(body);
     else
@@ -630,25 +650,29 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int> body)
 
 void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int> body)
 {
-    auto area = body.reduced(18, 10);
+    auto area = body.reduced(18, 8);
     const int columnWidth = area.getWidth() / kNumHarmonyVoices;
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
         auto columnBounds = area.withX(area.getX() + columnWidth * i).withWidth(columnWidth).reduced(8, 0);
         auto& column = voiceColumns[(size_t) i];
 
-        column.enableButton.setBounds(columnBounds.getX() + 2, columnBounds.getY() + 2, 65, 28);
-        column.soloButton.setBounds(columnBounds.getRight() - 65, columnBounds.getY() + 2, 63, 28);
-        column.title.setBounds(columnBounds.getX(), columnBounds.getY() + 28, columnBounds.getWidth(), 31);
-        column.intervalBox.setBounds(columnBounds.getX() + 44, columnBounds.getY() + 61, columnBounds.getWidth() - 88, 30);
+        // One centered On switch, title, gain rail and mirror panel: this is
+        // the exact hierarchy of the supplied Harmony and Advanced layouts.
+        column.enableButton.setBounds(columnBounds.getCentreX() - 33, columnBounds.getY() + 1, 66, 28);
+        column.soloButton.setBounds(-200, -200, 1, 1);
+        column.intervalBox.setBounds(-200, -200, 1, 1);
+        column.title.setBounds(columnBounds.getX(), columnBounds.getY() + 32, columnBounds.getWidth(), 31);
 
-        voiceLevelBounds[(size_t) i] = { columnBounds.getX(), columnBounds.getY() + 105, 30, columnBounds.getHeight() - 120 };
-        column.levelLabel.setBounds(voiceLevelBounds[(size_t) i].getX() - 7, voiceLevelBounds[(size_t) i].getY() - 24, 44, 18);
+        voiceLevelBounds[(size_t) i] = { columnBounds.getX() + 2, columnBounds.getY() + 83,
+                                          30, columnBounds.getHeight() - 92 };
+        column.levelLabel.setBounds(voiceLevelBounds[(size_t) i].getX() - 8,
+                                    voiceLevelBounds[(size_t) i].getY() - 24, 48, 18);
         column.levelSlider.setBounds(voiceLevelBounds[(size_t) i]);
 
-        voicePanelBounds[(size_t) i] = { columnBounds.getX() + 42, columnBounds.getY() + 100,
-                                          columnBounds.getWidth() - 46, columnBounds.getHeight() - 110 };
-        auto inner = voicePanelBounds[(size_t) i].reduced(16, 58);
+        voicePanelBounds[(size_t) i] = { columnBounds.getX() + 42, columnBounds.getY() + 80,
+                                          columnBounds.getWidth() - 46, columnBounds.getHeight() - 87 };
+        auto inner = voicePanelBounds[(size_t) i].reduced(16, 55);
 
         auto placePair = [this](juce::Slider& a, juce::Label& aLabel, juce::Slider& b, juce::Label& bLabel,
                                 juce::Rectangle<int> row)
@@ -672,7 +696,7 @@ void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int> body)
         }
         else
         {
-            auto top = inner.removeFromTop(100);
+            auto top = inner.removeFromTop(104);
             placePair(column.panSlider, column.panLabel, column.formantSlider, column.formantLabel, top);
         }
     }
@@ -745,8 +769,10 @@ void MirrorAudioProcessorEditor::drawBackground(juce::Graphics& g) const
 
 void MirrorAudioProcessorEditor::drawHeader(juce::Graphics& g) const
 {
+    const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
+    const float headerLineY = midiMode ? (currentPage == 1 ? 221.0f : 196.0f) : 177.0f;
     g.setColour(kGoldDim.withAlpha(0.38f));
-    g.drawLine(24.0f, 177.0f, (float) getWidth() - 24.0f, 177.0f, 0.75f);
+    g.drawLine(24.0f, headerLineY, (float) getWidth() - 24.0f, headerLineY, 0.75f);
     g.setColour(kPurple.withAlpha(0.30f));
     const float activeX = currentPage == 0 ? (float) getWidth() / 2.0f - 165.0f : (float) getWidth() / 2.0f + 7.0f;
     g.fillRoundedRectangle(activeX, 126.0f, 158.0f, 1.4f, 1.0f);
@@ -765,24 +791,50 @@ void MirrorAudioProcessorEditor::drawSectionTitle(juce::Graphics& g, const juce:
 void MirrorAudioProcessorEditor::drawMirrorPanel(juce::Graphics& g, juce::Rectangle<float> bounds, bool enabled, bool ornate) const
 {
     auto outer = bounds.reduced(2.0f);
-    const float corner = 24.0f;
-    g.setColour(juce::Colours::black.withAlpha(enabled ? 0.72f : 0.84f));
-    g.fillRoundedRectangle(outer, corner);
-    g.setColour(kGoldDim.withAlpha(enabled ? 0.88f : 0.42f));
-    g.drawRoundedRectangle(outer, corner, 2.0f);
-    g.setColour(kGold.withAlpha(enabled ? 0.64f : 0.24f));
-    g.drawRoundedRectangle(outer.reduced(5.0f), corner - 5.0f, 0.8f);
-    g.setColour(kPurple.withAlpha(enabled ? 0.11f : 0.02f));
-    g.fillRoundedRectangle(outer.reduced(8.0f), corner - 8.0f);
+    const float left = outer.getX(), right = outer.getRight();
+    const float top = outer.getY(), bottom = outer.getBottom();
+    const float width = outer.getWidth(), height = outer.getHeight();
+
+    // The silhouette deliberately has the shoulder and right-hand notch of
+    // the reference "mirror-glass" frames rather than a generic rounded box.
+    juce::Path frame;
+    frame.startNewSubPath(left + 31.0f, top);
+    frame.lineTo(right - 35.0f, top);
+    frame.cubicTo(right - 17.0f, top, right - 11.0f, top + 14.0f, right - 11.0f, top + 28.0f);
+    frame.lineTo(right - 11.0f, top + height * 0.35f);
+    frame.cubicTo(right + 5.0f, top + height * 0.40f, right + 5.0f, top + height * 0.46f,
+                  right - 4.0f, top + height * 0.50f);
+    frame.cubicTo(right + 5.0f, top + height * 0.54f, right + 5.0f, top + height * 0.60f,
+                  right - 11.0f, top + height * 0.65f);
+    frame.lineTo(right - 11.0f, bottom - 28.0f);
+    frame.cubicTo(right - 11.0f, bottom - 14.0f, right - 17.0f, bottom, right - 35.0f, bottom);
+    frame.lineTo(left + 31.0f, bottom);
+    frame.cubicTo(left + 13.0f, bottom, left + 7.0f, bottom - 14.0f, left + 7.0f, bottom - 31.0f);
+    frame.lineTo(left + 7.0f, top + 31.0f);
+    frame.cubicTo(left + 7.0f, top + 14.0f, left + 13.0f, top, left + 31.0f, top);
+    frame.closeSubPath();
+
+    g.setColour(juce::Colours::black.withAlpha(enabled ? 0.76f : 0.87f));
+    g.fillPath(frame);
+    g.setColour(kGoldDim.withAlpha(enabled ? 0.90f : 0.42f));
+    g.strokePath(frame, juce::PathStrokeType(2.0f));
+    g.setColour(kGold.withAlpha(enabled ? 0.60f : 0.22f));
+    g.strokePath(frame, juce::PathStrokeType(0.8f));
+
+    auto glass = outer.reduced(9.0f);
+    g.setColour(kPurple.withAlpha(enabled ? 0.085f : 0.018f));
+    g.fillRoundedRectangle(glass, 17.0f);
+    g.setColour(kGoldDim.withAlpha(enabled ? 0.28f : 0.11f));
+    g.drawRoundedRectangle(glass, 17.0f, 0.7f);
 
     if (ornate)
     {
-        const auto top = outer.getCentreX();
-        const auto y = outer.getY() + 18.0f;
-        g.setColour(kGold.withAlpha(enabled ? 0.52f : 0.22f));
-        g.drawEllipse(top - 8.0f, y - 8.0f, 16.0f, 16.0f, 0.9f);
-        g.drawLine(top - 14.0f, y, top + 14.0f, y, 0.7f);
-        g.drawLine(top, y - 14.0f, top, y + 14.0f, 0.7f);
+        const auto centre = outer.getCentreX();
+        const auto crestY = top + 17.0f;
+        g.setColour(kGold.withAlpha(enabled ? 0.58f : 0.22f));
+        g.drawEllipse(centre - 9.0f, crestY - 9.0f, 18.0f, 18.0f, 0.9f);
+        g.drawLine(centre - 16.0f, crestY, centre + 16.0f, crestY, 0.7f);
+        g.drawLine(centre, crestY - 16.0f, centre, crestY + 16.0f, 0.7f);
         for (auto point : { outer.getTopLeft(), outer.getTopRight(), outer.getBottomLeft(), outer.getBottomRight() })
             g.fillEllipse(point.x - 1.8f, point.y - 1.8f, 3.6f, 3.6f);
     }
