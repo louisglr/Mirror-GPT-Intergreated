@@ -84,7 +84,7 @@ private:
     KnobWithLabel dryLevelKnob, dryPanKnob, dryFormantKnob, dryPitchKnob, dryWidthKnob;
     std::array<VoiceColumn, kNumHarmonyVoices> voiceColumns;
     KnobWithLabel humanizeKnob, characterKnob, spreadKnob;
-    KnobWithLabel ambienceKnob, harmonyMixKnob, globalSaturationKnob;
+    KnobWithLabel ambienceKnob, harmonyMixKnob, globalSaturationKnob, outputGainKnob;
 
     std::array<juce::Rectangle<int>, kNumHarmonyVoices> voicePanelBounds;
     std::array<juce::Rectangle<int>, kNumHarmonyVoices> voiceLevelBounds;

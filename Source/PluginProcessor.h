@@ -209,6 +209,11 @@ private:
     std::array<float, kNumHarmonyVoices> voiceRatioSmoothed;
     std::array<float, kNumHarmonyVoices> voiceVibratoPhase;
     std::array<float, kNumHarmonyVoices> voiceLastMidi;
+    // MIDI harmonies must retain a trustworthy source reference through
+    // consonants and low-confidence detector frames, rather than snapping to
+    // a 1:1 ratio or reassigning registers unpredictably.
+    float lastStableInputFrequency = 180.0f;
+    int lastStableInputMidi = 57;
     int lastStableBaseMidi = 69;
     std::uint32_t lastHandledPitchRevision = 0;
 
@@ -234,9 +239,13 @@ private:
     float harmonyVoicing = 0.0f;
     float inputEnvelope = 0.0f;
     float voicingAttackCoeff = 0.01f, voicingReleaseCoeff = 0.001f;
+    // Independent gates avoid a hard discontinuity when a MIDI note, solo,
+    // or voice-enable state changes mid-waveform.
+    std::array<float, kNumHarmonyVoices> voiceGates {};
+    float voiceGateAttackCoeff = 0.01f, voiceGateReleaseCoeff = 0.001f;
     int reportedLatencySamples = 0;
 
-    juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed;
+    juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed, outputGainSmoothed;
     std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceLevelSmoothed, voicePanSmoothed;
 
     double currentSampleRate = 44100.0;

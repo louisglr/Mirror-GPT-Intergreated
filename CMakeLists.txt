@@ -30,6 +30,11 @@ juce_add_plugin(Mirror
     COPY_PLUGIN_AFTER_BUILD FALSE
 )
 
+juce_add_binary_data(MirrorAssets
+    SOURCES
+        Assets/mirror_engraved_background.jpg
+)
+
 target_sources(Mirror PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
@@ -44,6 +49,7 @@ target_compile_definitions(Mirror PUBLIC
 target_link_libraries(Mirror PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
+    MirrorAssets
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags

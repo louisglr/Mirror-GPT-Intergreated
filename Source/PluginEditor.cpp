@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 namespace
 {
@@ -28,6 +29,14 @@ namespace
         return text.replace("R", reversedR).replace("r", reversedR);
     }
 
+    const juce::Image& engravedBackgroundTexture()
+    {
+        static const auto texture = juce::ImageFileFormat::loadFrom(
+            BinaryData::mirror_engraved_background_jpg,
+            (size_t) BinaryData::mirror_engraved_background_jpgSize);
+        return texture;
+    }
+
     class MirrorLookAndFeel final : public juce::LookAndFeel_V4
     {
     public:
@@ -40,6 +49,35 @@ namespace
             setColour(juce::PopupMenu::textColourId, kText);
             setColour(juce::PopupMenu::highlightedBackgroundColourId, kPurpleDim);
             setColour(juce::PopupMenu::highlightedTextColourId, kText);
+        }
+
+        juce::Font getComboBoxFont(juce::ComboBox& box) override
+        {
+            return displayFont(juce::jlimit(15.0f, 22.0f, (float) box.getHeight() * 0.49f));
+        }
+
+        juce::Font getPopupMenuFont() override
+        {
+            return displayFont(18.0f);
+        }
+
+        void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override
+        {
+            label.setBounds(12, 1, box.getWidth() - 42, box.getHeight() - 2);
+            label.setFont(getComboBoxFont(box));
+            label.setJustificationType(juce::Justification::centred);
+        }
+
+        void drawPopupMenuBackgroundWithOptions(juce::Graphics& g, int width, int height,
+                                                const juce::PopupMenu::Options&) override
+        {
+            auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height);
+            g.setColour(juce::Colour(0xff0a090d).withAlpha(0.98f));
+            g.fillRoundedRectangle(bounds.reduced(1.0f), 7.0f);
+            g.setColour(kGoldDim.withAlpha(0.95f));
+            g.drawRoundedRectangle(bounds.reduced(1.0f), 7.0f, 1.0f);
+            g.setColour(kPurple.withAlpha(0.22f));
+            g.drawRoundedRectangle(bounds.reduced(4.0f), 5.0f, 0.65f);
         }
 
         void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
@@ -164,7 +202,9 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     setLookAndFeel(mirrorLookAndFeel.get());
     setOpaque(true);
     setResizable(true, true);
-    setResizeLimits(980, 620, 1680, 1040);
+    // The visual system is authored at the exact 1723×913 reference canvas,
+    // then scales down proportionally for smaller DAW windows.
+    setResizeLimits(1280, 680, 1723, 913);
 
     configureLabel(titleLabel, mirrorText("MIRROR"), 42.0f, false);
     titleLabel.setFont(displayFont(42.0f));
@@ -213,19 +253,19 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     addAndMakeVisible(rootLabel);
 
     configureComboBox(scaleBox, "Skala");
-    scaleBox.addItemList({ "ChЯomatic", "MajoЯ", "MinoЯ" }, 1);
+    scaleBox.addItemList({ "Chromatic", "Major", "Minor" }, 1);
     scaleAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "scaleType", scaleBox);
     configureLabel(scaleLabel, "SCALE", 15.0f);
     addAndMakeVisible(scaleLabel);
 
     configureComboBox(vocalRangeBox, "Vokalområde for pitch-tracking");
-    vocalRangeBox.addItemList({ "Auto", "Bass", "BaЯitone", "TenoЯ", "Alto", "SopЯano" }, 1);
+    vocalRangeBox.addItemList({ "Auto", "Bass", "Baritone", "Tenor", "Alto", "Soprano" }, 1);
     vocalRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "vocalRange", vocalRangeBox);
     configureLabel(vocalRangeLabel, "VOICE ЯANGE", 10.5f);
     addAndMakeVisible(vocalRangeLabel);
 
     configureComboBox(harmonyStyleBox, "Musikalsk harmoni-stil");
-    harmonyStyleBox.addItemList({ "Tight", "NatuЯal", "Wide", "ChoiЯ" }, 1);
+    harmonyStyleBox.addItemList({ "Tight", "Natural", "Wide", "Choir" }, 1);
     harmonyStyleAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "harmonyStyle", harmonyStyleBox);
     configureLabel(harmonyStyleLabel, "STYLE", 10.5f);
     addAndMakeVisible(harmonyStyleLabel);
@@ -237,15 +277,15 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     addAndMakeVisible(midiVoicingLabel);
 
     configureComboBox(midiInversionBox, "MIDI-inversion");
-    midiInversionBox.addItemList({ "Auto", "Яoot", "1st", "2nd", "3Яd" }, 1);
+    midiInversionBox.addItemList({ "Auto", "Root", "1st", "2nd", "3rd" }, 1);
     midiInversionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "midiInversion", midiInversionBox);
     configureLabel(midiInversionLabel, "INVEЯSION", 10.5f);
     addAndMakeVisible(midiInversionLabel);
 
     configureComboBox(presetBox, "PЯeset");
-    presetBox.addItem("VocodeЯ Glass", 1);
-    presetBox.addItem("FЯactuЯed Stack", 2);
-    presetBox.addItem("Stadium ChoiЯ", 3);
+    presetBox.addItem("Vocoder Glass", 1);
+    presetBox.addItem("Fractured Stack", 2);
+    presetBox.addItem("Stadium Choir", 3);
     presetBox.setSelectedId(1, juce::dontSendNotification);
     presetBox.onChange = [this] { applyPreset(presetBox.getSelectedId()); };
     configureLabel(presetLabel, "PЯESET", 11.0f, false);
@@ -276,10 +316,11 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     harmonyMixKnob.slider.setColour(juce::Slider::trackColourId, kGoldDim);
     harmonyMixKnob.slider.setColour(juce::Slider::thumbColourId, kGold);
     setupKnob(globalSaturationKnob, "globalSaturation", "GLUE");
+    setupKnob(outputGainKnob, "outputGain", "GAIN");
 
     modeBox.onChange = [this] { updateControlVisibility(); };
     mainPageButton.setToggleState(true, juce::dontSendNotification);
-    setSize(1220, 760);
+    setSize(1723, 913);
     updateControlVisibility();
     startTimerHz(30);
 }
@@ -338,10 +379,9 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& column, int voice
     column.soloAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(audioProcessor.apvts, "voiceSolo" + index, column.soloButton);
 
     configureComboBox(column.intervalBox, "Interval for Voice " + index);
-    auto intervals = getIntervalNames();
-    for (auto& item : intervals)
-        item = mirrorText(item);
-    column.intervalBox.addItemList(intervals, 1);
+    // Menu values stay conventional and immediately readable (+3rd, -3rd);
+    // the mirrored glyph is reserved for the brand and decorative labels.
+    column.intervalBox.addItemList(getIntervalNames(), 1);
     column.intervalAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "voiceInterval" + index, column.intervalBox);
 
     auto setupSmall = [this](juce::Slider& slider, juce::Label& label, const juce::String& parameterID, const juce::String& caption)
@@ -501,6 +541,7 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     vocalRangeLabel.setVisible(false);
     harmonyStyleBox.setVisible(false);
     harmonyStyleLabel.setVisible(false);
+    presetLabel.setVisible(false);
     midiVoicingBox.setVisible(mode == 1);
     midiVoicingLabel.setVisible(mode == 1);
     midiInversionBox.setVisible(mode == 1);
@@ -513,7 +554,7 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     };
     for (auto* knob : { &trackingKnob, &glideKnob, &dryLevelKnob, &dryPanKnob, &dryFormantKnob,
                         &dryPitchKnob, &dryWidthKnob, &humanizeKnob, &characterKnob, &spreadKnob,
-                        &ambienceKnob, &harmonyMixKnob, &globalSaturationKnob })
+                        &ambienceKnob, &harmonyMixKnob, &globalSaturationKnob, &outputGainKnob })
         showKnob(*knob);
     freezeButton.setVisible(main);
 
@@ -521,10 +562,10 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     {
         column.title.setVisible(harmony);
         column.enableButton.setVisible(harmony);
-        // Solo and interval stay exposed to the DAW for automation, but the
-        // front page follows the reference: one clean On switch per voice.
         column.soloButton.setVisible(false);
-        column.intervalBox.setVisible(false);
+        // Interval is a primary musical choice, not a hidden host-only
+        // parameter.  It is placed discretely inside every voice panel.
+        column.intervalBox.setVisible(harmony);
         for (auto* component : { (juce::Component*) &column.levelSlider, (juce::Component*) &column.levelLabel,
                                  (juce::Component*) &column.panSlider, (juce::Component*) &column.panLabel,
                                  (juce::Component*) &column.formantSlider, (juce::Component*) &column.formantLabel })
@@ -553,65 +594,72 @@ void MirrorAudioProcessorEditor::placeSmallKnob(juce::Slider& slider, juce::Labe
 
 void MirrorAudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds().reduced(24);
-    const int width = getWidth();
+    constexpr float referenceWidth = 1723.0f;
+    constexpr float referenceHeight = 913.0f;
+    const float sx = (float) getWidth() / referenceWidth;
+    const float sy = (float) getHeight() / referenceHeight;
+    const auto rect = [sx, sy](float x, float y, float w, float h)
+    {
+        return juce::Rectangle<int>(
+            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+    };
+
     const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
+    titleLabel.setBounds(rect(50, 30, 370, 84));
+    creditLabel.setBounds(rect(50, 118, 310, 30));
+    presetLabel.setBounds(0, -30, 1, 1);
+    presetBox.setBounds(rect(50, 183, 230, 47));
 
-    // Header: deliberately matched to the three supplied references.
-    titleLabel.setBounds(12, 22, juce::jmin(305, width / 3), 58);
-    creditLabel.setBounds(16, 80, 280, 24);
-    presetLabel.setBounds(16, 119, 90, 18);
-    presetBox.setBounds(16, 140, 190, 33);
+    modeLabel.setBounds(rect(775, 26, 220, 32));
+    modeBox.setBounds(rect(774, 67, 220, 49));
+    rootLabel.setBounds(rect(1248, 26, 210, 32));
+    rootBox.setBounds(rect(1252, 67, 210, 49));
+    scaleLabel.setBounds(rect(1490, 26, 210, 32));
+    scaleBox.setBounds(rect(1493, 67, 210, 49));
 
-    const int controlW = 170;
-    const int modeX = width / 2 - controlW / 2;
-    modeLabel.setBounds(modeX, 20, controlW, 20);
-    modeBox.setBounds(modeX, 42, controlW, 34);
+    mainPageButton.setBounds(rect(624, 134, 240, 47));
+    harmonyPageButton.setBounds(rect(868, 134, 242, 47));
 
-    rootLabel.setBounds(width - 314, 20, 116, 20);
-    rootBox.setBounds(width - 314, 42, 116, 34);
-    scaleLabel.setBounds(width - 184, 20, 150, 20);
-    scaleBox.setBounds(width - 184, 42, 150, 34);
+    // MIDI options are only revealed after MIDI is explicitly selected, then
+    // sit beneath the navigation without colliding with the reference layout.
+    midiVoicingLabel.setBounds(rect(608, 191, 190, 22));
+    midiVoicingBox.setBounds(rect(608, 214, 190, 34));
+    midiInversionLabel.setBounds(rect(924, 191, 190, 22));
+    midiInversionBox.setBounds(rect(924, 214, 190, 34));
+    advancedButton.setBounds(rect(774, midiMode ? 260 : 191, 180, 39));
 
-    mainPageButton.setBounds(width / 2 - 170, 92, 168, 36);
-    harmonyPageButton.setBounds(width / 2 + 2, 92, 168, 36);
-
-    // The Manual front page stays visually identical to the mockup. Selecting
-    // MIDI exposes only the two meaningful chord controls, without overlap.
-    const int midiY = 137;
-    midiVoicingLabel.setBounds(modeX - 104, midiY, 98, 16);
-    midiVoicingBox.setBounds(modeX - 104, midiY + 16, 98, 27);
-    midiInversionLabel.setBounds(modeX + controlW + 6, midiY, 98, 16);
-    midiInversionBox.setBounds(modeX + controlW + 6, midiY + 16, 98, 27);
-
-    const int advancedY = midiMode ? 184 : 133;
-    advancedButton.setBounds(width / 2 - 85, advancedY, 170, 31);
-
-    // Retained host parameters have no front-panel bounds by design.
     vocalRangeLabel.setBounds(0, -30, 1, 1);
     vocalRangeBox.setBounds(0, -30, 1, 1);
     harmonyStyleLabel.setBounds(0, -30, 1, 1);
     harmonyStyleBox.setBounds(0, -30, 1, 1);
 
-    int bodyTop = midiMode ? (currentPage == 1 ? 224 : 198) : 180;
-    auto body = area.withTop(bodyTop).reduced(0, 4);
+    const auto body = rect(0, midiMode ? 305 : 232, referenceWidth, referenceHeight - (midiMode ? 305 : 232));
     if (currentPage == 0)
         layoutMain(body);
     else
         layoutHarmony(body);
 }
-
-void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int> body)
+void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int>)
 {
-    const int sideWidth = juce::jlimit(220, 300, body.getWidth() / 4);
-    dryPanelBounds = body.removeFromLeft(sideWidth).reduced(4);
-    characterPanelBounds = body.removeFromRight(sideWidth).reduced(4);
-    auto centre = body.reduced(16, 0);
-    const int outputHeight = juce::jmin(205, centre.getHeight() / 3);
-    outputPanelBounds = centre.removeFromBottom(outputHeight).reduced(16, 0);
-    mirrorBounds = centre.reduced(0, 8);
+    constexpr float referenceWidth = 1723.0f;
+    constexpr float referenceHeight = 913.0f;
+    const float sx = (float) getWidth() / referenceWidth;
+    const float sy = (float) getHeight() / referenceHeight;
+    const auto rect = [sx, sy](float x, float y, float w, float h)
+    {
+        return juce::Rectangle<int>(
+            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+    };
 
-    auto dry = dryPanelBounds.reduced(21, 67);
+    // Directly trace the three supplied Main reference panels.
+    dryPanelBounds = rect(58, 273, 420, 580);
+    characterPanelBounds = rect(1264, 273, 406, 580);
+    mirrorBounds = rect(487, 212, 770, 257);
+    outputPanelBounds = rect(632, 495, 530, 350);
+
+    auto dry = dryPanelBounds.reduced(45, 116);
     auto top = dry.removeFromTop(dry.getHeight() / 3);
     auto leftTop = top.removeFromLeft(top.getWidth() / 2);
     placeKnob(dryLevelKnob, leftTop);
@@ -623,7 +671,7 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int> body)
     placeKnob(dryWidthKnob, leftBottom);
     placeKnob(dryFormantKnob, bottom);
 
-    auto character = characterPanelBounds.reduced(20, 67);
+    auto character = characterPanelBounds.reduced(44, 116);
     const int rowH = character.getHeight() / 3;
     auto row1 = character.removeFromTop(rowH);
     auto row2 = character.removeFromTop(rowH);
@@ -637,43 +685,54 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int> body)
     placePair(trackingKnob, glideKnob, row1);
     placePair(humanizeKnob, characterKnob, row2);
     placePair(ambienceKnob, spreadKnob, row3);
-    freezeButton.setBounds(characterPanelBounds.getCentreX() - 48, characterPanelBounds.getBottom() - 31, 96, 26);
+    freezeButton.setBounds(rect(1370, 802, 182, 28));
 
-    auto output = outputPanelBounds.reduced(38, 60);
-    auto knobs = output.removeFromTop(90);
+    auto output = outputPanelBounds.reduced(62, 86);
+    auto knobs = output.removeFromTop(112);
     auto glue = knobs.removeFromLeft(knobs.getWidth() / 2);
-    placeKnob(globalSaturationKnob, glue.reduced(25, 0));
-    auto mix = output.reduced(10, 0);
-    harmonyMixKnob.label.setBounds(mix.removeFromTop(19));
-    harmonyMixKnob.slider.setBounds(mix.removeFromTop(36).reduced(5, 5));
+    placeKnob(globalSaturationKnob, glue.reduced(20, 0));
+    placeKnob(outputGainKnob, knobs.reduced(20, 0));
+    auto mix = output.reduced(8, 0);
+    harmonyMixKnob.label.setBounds(mix.removeFromTop(24));
+    harmonyMixKnob.slider.setBounds(mix.removeFromTop(42).reduced(6, 6));
 }
-
-void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int> body)
+void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int>)
 {
-    auto area = body.reduced(18, 8);
-    const int columnWidth = area.getWidth() / kNumHarmonyVoices;
+    constexpr float referenceWidth = 1730.0f;
+    constexpr float referenceHeight = 909.0f;
+    const float sx = (float) getWidth() / referenceWidth;
+    const float sy = (float) getHeight() / referenceHeight;
+    const auto rect = [sx, sy](float x, float y, float w, float h)
+    {
+        return juce::Rectangle<int>(
+            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+    };
+
+    const float panelY = showAdvanced ? 338.0f : 367.0f;
+    const float panelH = showAdvanced ? 525.0f : 500.0f;
+
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
-        auto columnBounds = area.withX(area.getX() + columnWidth * i).withWidth(columnWidth).reduced(8, 0);
+        const float offset = (float) i * 410.0f;
         auto& column = voiceColumns[(size_t) i];
 
-        // One centered On switch, title, gain rail and mirror panel: this is
-        // the exact hierarchy of the supplied Harmony and Advanced layouts.
-        column.enableButton.setBounds(columnBounds.getCentreX() - 33, columnBounds.getY() + 1, 66, 28);
-        column.soloButton.setBounds(-200, -200, 1, 1);
-        column.intervalBox.setBounds(-200, -200, 1, 1);
-        column.title.setBounds(columnBounds.getX(), columnBounds.getY() + 32, columnBounds.getWidth(), 31);
-
-        voiceLevelBounds[(size_t) i] = { columnBounds.getX() + 2, columnBounds.getY() + 83,
-                                          30, columnBounds.getHeight() - 92 };
-        column.levelLabel.setBounds(voiceLevelBounds[(size_t) i].getX() - 8,
-                                    voiceLevelBounds[(size_t) i].getY() - 24, 48, 18);
+        column.enableButton.setBounds(rect(215 + offset, 257, 82, 30));
+        column.title.setBounds(rect(138 + offset, 300, 270, 42));
+        voiceLevelBounds[(size_t) i] = rect(62 + offset, panelY + 4, 30, panelH - 10);
+        column.levelLabel.setBounds(rect(51 + offset, panelY - 22, 58, 18));
         column.levelSlider.setBounds(voiceLevelBounds[(size_t) i]);
 
-        voicePanelBounds[(size_t) i] = { columnBounds.getX() + 42, columnBounds.getY() + 80,
-                                          columnBounds.getWidth() - 46, columnBounds.getHeight() - 87 };
-        auto inner = voicePanelBounds[(size_t) i].reduced(16, 55);
+        voicePanelBounds[(size_t) i] = rect(140 + offset, panelY, 264, panelH);
+        column.soloButton.setBounds(-200, -200, 1, 1);
 
+        // The interval is restored as a compact, readable musical selector.
+        // In Advanced it sits above the rows; in the simple view it uses the
+        // deliberately open space in the lower panel.
+        const float intervalY = showAdvanced ? panelY + 42.0f : panelY + 235.0f;
+        column.intervalBox.setBounds(rect(166 + offset, intervalY, 212, 32));
+
+        auto inner = voicePanelBounds[(size_t) i].reduced(18, showAdvanced ? 82 : 58);
         auto placePair = [this](juce::Slider& a, juce::Label& aLabel, juce::Slider& b, juce::Label& bLabel,
                                 juce::Rectangle<int> row)
         {
@@ -696,12 +755,11 @@ void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int> body)
         }
         else
         {
-            auto top = inner.removeFromTop(104);
+            auto top = inner.removeFromTop(130);
             placePair(column.panSlider, column.panLabel, column.formantSlider, column.formantLabel, top);
         }
     }
 }
-
 void MirrorAudioProcessorEditor::timerCallback()
 {
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
@@ -740,54 +798,55 @@ void MirrorAudioProcessorEditor::paint(juce::Graphics& g)
 void MirrorAudioProcessorEditor::drawBackground(juce::Graphics& g) const
 {
     const auto bounds = getLocalBounds().toFloat();
-    juce::ColourGradient gradient(juce::Colour(0xff171319), bounds.getCentreX(), 0.0f,
-                                  juce::Colour(0xff030304), bounds.getCentreX(), bounds.getBottom(), false);
-    g.setGradientFill(gradient);
-    g.fillAll();
+    g.fillAll(kInk);
 
-    juce::Random random(177013);
-    g.setColour(kGoldDim.withAlpha(0.08f));
-    for (int i = 0; i < 78; ++i)
+    const auto& texture = engravedBackgroundTexture();
+    if (texture.isValid())
     {
-        const float x = random.nextFloat() * bounds.getWidth();
-        const float y = random.nextFloat() * bounds.getHeight();
-        const float size = 14.0f + random.nextFloat() * 52.0f;
-        g.drawEllipse(x, y, size, size, 0.45f);
-        if ((i % 3) == 0)
-            g.drawLine(x - size * 0.6f, y, x + size * 0.6f, y, 0.35f);
+        g.setOpacity(0.68f);
+        g.drawImageWithin(texture, 0, 0, getWidth(), getHeight(),
+                          juce::RectanglePlacement::stretchToFit, false);
+        g.setOpacity(1.0f);
     }
 
-    g.setColour(juce::Colours::black.withAlpha(0.24f));
-    for (int i = 0; i < 10; ++i)
-        g.fillRect(0.0f, (float) i * bounds.getHeight() / 10.0f, bounds.getWidth(), 1.0f);
+    // A restrained vignette preserves the engraved depth while keeping
+    // foreground controls legible at every supported UI scale.
+    juce::ColourGradient vignette(juce::Colours::transparentBlack, bounds.getCentreX(), bounds.getCentreY(),
+                                  juce::Colours::black.withAlpha(0.58f), bounds.getRight(), bounds.getBottom(), true);
+    g.setGradientFill(vignette);
+    g.fillRect(bounds);
 
     g.setColour(kGoldDim.withAlpha(0.58f));
-    g.drawRoundedRectangle(bounds.reduced(3.0f), 5.0f, 1.0f);
-    g.setColour(kPurple.withAlpha(0.12f));
-    g.drawRoundedRectangle(bounds.reduced(7.0f), 3.0f, 0.7f);
+    g.drawRoundedRectangle(bounds.reduced(4.0f), 5.0f, 1.0f);
+    g.setColour(kGold.withAlpha(0.20f));
+    g.drawRoundedRectangle(bounds.reduced(8.0f), 3.0f, 0.65f);
 }
-
 void MirrorAudioProcessorEditor::drawHeader(juce::Graphics& g) const
 {
+    constexpr float referenceWidth = 1723.0f;
+    constexpr float referenceHeight = 913.0f;
+    const float sx = (float) getWidth() / referenceWidth;
+    const float sy = (float) getHeight() / referenceHeight;
     const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
-    const float headerLineY = midiMode ? (currentPage == 1 ? 221.0f : 196.0f) : 177.0f;
-    g.setColour(kGoldDim.withAlpha(0.38f));
-    g.drawLine(24.0f, headerLineY, (float) getWidth() - 24.0f, headerLineY, 0.75f);
-    g.setColour(kPurple.withAlpha(0.30f));
-    const float activeX = currentPage == 0 ? (float) getWidth() / 2.0f - 165.0f : (float) getWidth() / 2.0f + 7.0f;
-    g.fillRoundedRectangle(activeX, 126.0f, 158.0f, 1.4f, 1.0f);
-}
+    const float activeX = currentPage == 0 ? 635.0f : 879.0f;
+    const float headerY = midiMode ? 298.0f : 228.0f;
 
+    g.setColour(kGoldDim.withAlpha(0.36f));
+    g.drawLine(28.0f * sx, headerY * sy, (referenceWidth - 28.0f) * sx, headerY * sy, 0.75f * sx);
+    g.setColour(kPurple.withAlpha(0.78f));
+    g.fillRoundedRectangle(activeX * sx, 176.0f * sy, 218.0f * sx, 1.7f * sy, 1.0f);
+}
 void MirrorAudioProcessorEditor::drawSectionTitle(juce::Graphics& g, const juce::String& text, juce::Rectangle<int> bounds) const
 {
-    g.setFont(displayFont(28.0f));
-    g.setColour(kText.withAlpha(0.90f));
-    g.drawText(text, bounds, juce::Justification::centred);
-    g.setFont(displayFont(24.0f));
-    g.setColour(kText.withAlpha(0.075f));
-    g.drawText(text, bounds.translated(0, 20), juce::Justification::centred);
+    const float scale = (float) getWidth() / 1723.0f;
+    g.setFont(displayFont(37.0f * scale));
+    g.setColour(kText.withAlpha(0.86f));
+    g.drawText(text, bounds.withHeight(72), juce::Justification::centred);
+    g.setFont(displayFont(31.0f * scale));
+    g.setColour(kText.withAlpha(0.09f));
+    g.drawText(text, bounds.withHeight(72).translated(0, (int) (28.0f * scale)),
+               juce::Justification::centred);
 }
-
 void MirrorAudioProcessorEditor::drawMirrorPanel(juce::Graphics& g, juce::Rectangle<float> bounds, bool enabled, bool ornate) const
 {
     auto outer = bounds.reduced(2.0f);
