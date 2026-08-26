@@ -587,6 +587,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float dryOutR = widenedR * std::sin(dryPanPos) * 1.4142f;
 
         float harmonySumL = 0.0f, harmonySumR = 0.0f;
+    // Peak values are UI telemetry only. They are block-rate and do not alter audio.
+    std::array<float, kNumHarmonyVoices> visualVoicePeaks {};
 
         const auto pitchRevision = pitchDetector.getRevision();
         if (pitchRevision != lastHandledPitchRevision)
@@ -683,6 +685,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             raw *= harmonyVoicing;
 
             float level = voiceLevelSmoothed[(size_t) i].getNextValue();
+            visualVoicePeaks[(size_t) i] = juce::jmax(visualVoicePeaks[(size_t) i], std::abs(raw * level));
             float pan = voicePanSmoothed[(size_t) i].getNextValue();
             float panPos = (juce::jlimit(-1.0f, 1.0f, pan) * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
 
@@ -716,6 +719,9 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         channelL[n] = softSafetyLimit(outL);
         channelR[n] = softSafetyLimit(outR);
     }
+
+    for (int i = 0; i < kNumHarmonyVoices; ++i)
+        currentVoiceVisualLevels[(size_t) i].store(juce::jlimit(0.0f, 1.0f, visualVoicePeaks[(size_t) i] * 2.4f));
 
     currentDetectedFreq.store(pitchDetector.getFrequency());
     currentConfidence.store(pitchDetector.getConfidence());

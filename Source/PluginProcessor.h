@@ -182,6 +182,8 @@ public:
     std::atomic<float> currentDetectedFreq { 0.0f };
     std::atomic<float> currentConfidence { 0.0f };
     std::atomic<int> currentHeldNoteCount { 0 };
+    // UI-only meters: updated once per audio block, read by the editor timer.
+    std::array<std::atomic<float>, kNumHarmonyVoices> currentVoiceVisualLevels {};
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
