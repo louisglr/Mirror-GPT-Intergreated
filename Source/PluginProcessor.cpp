@@ -79,7 +79,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     addBipolar("dryPan", "Dry Pan", 0.0f);
     addBipolar("dryFormant", "Dry Formant", 0.0f);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("st"));
+        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("st")));
     add01("dryWidth", "Dry Width", 0.5f);
 
     // --- HARMONY (4 stemmer) ---
@@ -124,7 +124,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceFineTune" + idx, 1 }, "Voice " + idx + " Fine Tune",
-            Range(-50.0f, 50.0f, 0.1f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("cents"));
+            Range(-50.0f, 50.0f, 0.1f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("cents")));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceTone" + idx, 1 }, "Voice " + idx + " Tone",
@@ -136,7 +136,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceMicroDelay" + idx, 1 }, "Voice " + idx + " Micro Delay",
-            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i], juce::AudioParameterFloatAttributes().withLabel("ms"));
+            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i], juce::AudioParameterFloatAttributes().withLabel("ms")));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceVibrato" + idx, 1 }, "Voice " + idx + " Vibrato",
@@ -160,7 +160,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     add01("globalSaturation", "Global Saturation", 0.0f);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "outputGain", 1 }, "Output Gain",
-        Range(-18.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("dB"));
+        Range(-18.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("dB")));
 
     return { params.begin(), params.end() };
 }
