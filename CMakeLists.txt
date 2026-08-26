@@ -21,6 +21,7 @@ juce_add_plugin(Mirror
     PLUGIN_CODE Mirr
     FORMATS AU VST3
     PRODUCT_NAME "MIRROR"
+    BUNDLE_ID "com.louisgabriel.mirror"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE

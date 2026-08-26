@@ -24,7 +24,7 @@ namespace
 
     juce::String mirrorText(juce::String text)
     {
-        const auto reversedR = juce::String::charToString((juce_wchar) 0x042f);
+        const auto reversedR = juce::String::charToString((juce::juce_wchar) 0x042f);
         return text.replace("R", reversedR).replace("r", reversedR);
     }
 
@@ -793,7 +793,7 @@ void MirrorAudioProcessorEditor::drawMirrorPanel(juce::Graphics& g, juce::Rectan
     auto outer = bounds.reduced(2.0f);
     const float left = outer.getX(), right = outer.getRight();
     const float top = outer.getY(), bottom = outer.getBottom();
-    const float width = outer.getWidth(), height = outer.getHeight();
+    const float height = outer.getHeight();
 
     // The silhouette deliberately has the shoulder and right-hand notch of
     // the reference "mirror-glass" frames rather than a generic rounded box.
