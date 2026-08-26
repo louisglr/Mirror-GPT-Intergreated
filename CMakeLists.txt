@@ -33,6 +33,9 @@ juce_add_plugin(Mirror
 juce_add_binary_data(MirrorAssets
     SOURCES
         Assets/mirror_engraved_background.jpg
+        Assets/mirror_reference_main.png
+        Assets/mirror_reference_harmony.png
+        Assets/mirror_reference_advanced.png
 )
 
 target_sources(Mirror PRIVATE

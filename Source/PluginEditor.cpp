@@ -37,6 +37,35 @@ namespace
         return texture;
     }
 
+    const juce::Image& referenceMainImage()
+    {
+        static const auto image = juce::ImageFileFormat::loadFrom(
+            BinaryData::mirror_reference_main_png,
+            (size_t) BinaryData::mirror_reference_main_pngSize);
+        return image;
+    }
+
+    const juce::Image& referenceHarmonyImage()
+    {
+        static const auto image = juce::ImageFileFormat::loadFrom(
+            BinaryData::mirror_reference_harmony_png,
+            (size_t) BinaryData::mirror_reference_harmony_pngSize);
+        return image;
+    }
+
+    const juce::Image& referenceAdvancedImage()
+    {
+        static const auto image = juce::ImageFileFormat::loadFrom(
+            BinaryData::mirror_reference_advanced_png,
+            (size_t) BinaryData::mirror_reference_advanced_pngSize);
+        return image;
+    }
+
+    bool isReferenceOverlay(const juce::Component& component)
+    {
+        return component.getComponentID() == "reference-overlay";
+    }
+
     class MirrorLookAndFeel final : public juce::LookAndFeel_V4
     {
     public:
@@ -71,69 +100,138 @@ namespace
         void drawPopupMenuBackgroundWithOptions(juce::Graphics& g, int width, int height,
                                                 const juce::PopupMenu::Options&) override
         {
-            auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height);
-            g.setColour(juce::Colour(0xff0a090d).withAlpha(0.98f));
-            g.fillRoundedRectangle(bounds.reduced(1.0f), 7.0f);
-            g.setColour(kGoldDim.withAlpha(0.95f));
-            g.drawRoundedRectangle(bounds.reduced(1.0f), 7.0f, 1.0f);
-            g.setColour(kPurple.withAlpha(0.22f));
-            g.drawRoundedRectangle(bounds.reduced(4.0f), 5.0f, 0.65f);
+            const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height);
+            g.setColour(juce::Colour(0xff09080b).withAlpha(0.985f));
+            g.fillRoundedRectangle(bounds.reduced(1.0f), 6.0f);
+            g.setColour(kGoldDim.withAlpha(0.96f));
+            g.drawRoundedRectangle(bounds.reduced(1.0f), 6.0f, 1.0f);
+            g.setColour(kPurple.withAlpha(0.18f));
+            g.drawRoundedRectangle(bounds.reduced(4.0f), 4.0f, 0.65f);
         }
 
         void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
-                              float position, float startAngle, float endAngle,
-                              juce::Slider& slider) override
+                              float position, float, float, juce::Slider& slider) override
         {
-            auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height).reduced(5.0f);
-            const float diameter = juce::jmin(bounds.getWidth(), bounds.getHeight());
-            bounds = bounds.withSizeKeepingCentre(diameter, diameter);
+            auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height);
+            const float diameter = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.70f;
+            bounds = bounds.withSizeKeepingCentre(diameter, diameter).reduced(1.0f);
 
             const auto centre = bounds.getCentre();
             const float radius = bounds.getWidth() * 0.5f;
             const bool active = slider.isMouseOverOrDragging();
-            const float glow = active ? 0.42f : 0.20f;
+            const float start = juce::MathConstants<float>::pi * 0.75f;
+            const float zero = juce::MathConstants<float>::pi * 1.5f;
+            const float end = juce::MathConstants<float>::pi * 2.25f;
+            const float min = (float) slider.getMinimum();
+            const float max = (float) slider.getMaximum();
+            const float value = (float) slider.getValue();
+            const bool bipolar = min < 0.0f && max > 0.0f;
 
-            juce::ColourGradient body(kGold.withAlpha(0.92f), bounds.getTopLeft(),
-                                      juce::Colour(0xff2c1e18), bounds.getBottomRight(), false);
-            g.setGradientFill(body);
+            float angle = juce::jmap(position, start, end);
+            if (bipolar)
+            {
+                angle = value <= 0.0f
+                    ? juce::jmap(value, min, 0.0f, start, zero)
+                    : juce::jmap(value, 0.0f, max, zero, end);
+            }
+
+            for (int tick = 0; tick < 17; ++tick)
+            {
+                const float phase = juce::jmap((float) tick, 0.0f, 16.0f, start, end);
+                const auto dot = centre + juce::Point<float>(std::cos(phase), std::sin(phase)) * (radius * 1.10f);
+                g.setColour(kGold.withAlpha(tick == 8 && bipolar ? 0.70f : 0.32f));
+                g.fillEllipse(dot.x - 1.05f, dot.y - 1.05f, 2.1f, 2.1f);
+            }
+
+            g.setColour(juce::Colours::black.withAlpha(0.84f));
+            g.fillEllipse(bounds.expanded(3.0f));
+            g.setColour(kGoldDim.withAlpha(0.94f));
+            g.drawEllipse(bounds.expanded(3.0f), 1.05f);
+
+            juce::ColourGradient brass(juce::Colour(0xfff1d9a8), bounds.getX(), bounds.getY(),
+                                       juce::Colour(0xff7d5536), bounds.getRight(), bounds.getBottom(), false);
+            g.setGradientFill(brass);
             g.fillEllipse(bounds);
+            g.setColour(juce::Colour(0xff2c1b14).withAlpha(0.88f));
+            g.drawEllipse(bounds.reduced(1.6f), 1.1f);
 
-            g.setColour(juce::Colours::black.withAlpha(0.8f));
-            g.drawEllipse(bounds, 2.0f);
-            g.setColour(kGold.withAlpha(0.80f));
-            g.drawEllipse(bounds.reduced(2.5f), 1.0f);
-            g.setColour(kPurple.withAlpha(glow));
-            g.drawEllipse(bounds.expanded(4.0f), active ? 2.0f : 1.0f);
-
-            auto inner = bounds.reduced(radius * 0.20f);
-            juce::ColourGradient innerShade(juce::Colour(0xfff0d9ac).withAlpha(0.78f), inner.getTopLeft(),
-                                             juce::Colour(0xff6a4930).withAlpha(0.85f), inner.getBottomRight(), false);
-            g.setGradientFill(innerShade);
+            const auto inner = bounds.reduced(radius * 0.19f);
+            juce::ColourGradient brush(juce::Colour(0xffffedc8).withAlpha(0.72f), inner.getTopLeft(),
+                                       juce::Colour(0xff6c4329).withAlpha(0.92f), inner.getBottomRight(), false);
+            g.setGradientFill(brush);
             g.fillEllipse(inner);
-            g.setColour(kGold.withAlpha(0.62f));
-            g.drawEllipse(inner, 0.8f);
+            g.setColour(kGold.withAlpha(0.55f));
+            g.drawEllipse(inner, 0.7f);
 
-            const float angle = juce::jmap(position, startAngle, endAngle);
-            const auto dot = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * (radius * 0.60f);
-            g.setColour(kPurple.withAlpha(0.92f));
-            g.drawLine(centre.x, centre.y, dot.x, dot.y, 2.4f);
-            g.setColour(kText.withAlpha(0.85f));
-            g.fillEllipse(juce::Rectangle<float>(dot.x - 1.8f, dot.y - 1.8f, 3.6f, 3.6f));
+            const auto startPoint = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * (radius * 0.10f);
+            const auto endPoint = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * (radius * 0.67f);
+            g.setColour(juce::Colours::black.withAlpha(0.5f));
+            g.drawLine(startPoint.x + 0.8f, startPoint.y + 1.3f, endPoint.x + 0.8f, endPoint.y + 1.3f, 3.2f);
+            g.setColour(kPurple.brighter(active ? 0.30f : 0.08f));
+            g.drawLine(startPoint.x, startPoint.y, endPoint.x, endPoint.y, active ? 2.5f : 2.0f);
+            g.setColour(kText.withAlpha(0.92f));
+            g.fillEllipse(endPoint.x - 1.4f, endPoint.y - 1.4f, 2.8f, 2.8f);
+        }
+
+        void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
+                              float sliderPos, float, float,
+                              const juce::Slider::SliderStyle style, juce::Slider&) override
+        {
+            if (style == juce::Slider::LinearHorizontal)
+            {
+                const auto track = juce::Rectangle<float>((float) x + 6.0f, (float) y + (float) height * 0.50f - 2.2f,
+                                                          (float) width - 12.0f, 4.4f);
+                g.setColour(juce::Colours::black.withAlpha(0.85f));
+                g.fillRoundedRectangle(track.expanded(1.7f, 2.8f), 4.0f);
+                g.setColour(kGoldDim.withAlpha(0.94f));
+                g.drawRoundedRectangle(track.expanded(1.7f, 2.8f), 4.0f, 0.85f);
+                const float fillWidth = juce::jlimit(0.0f, track.getWidth(), sliderPos - track.getX());
+                g.setColour(kPurple.withAlpha(0.84f));
+                g.fillRoundedRectangle(track.withWidth(fillWidth), 2.2f);
+                const auto thumb = juce::Rectangle<float>(sliderPos - 10.0f, track.getCentreY() - 10.0f, 20.0f, 20.0f);
+                juce::ColourGradient brass(juce::Colour(0xfff4dbac), thumb.getTopLeft(),
+                                           juce::Colour(0xff765033), thumb.getBottomRight(), false);
+                g.setGradientFill(brass);
+                g.fillEllipse(thumb);
+                g.setColour(kGold.withAlpha(0.88f));
+                g.drawEllipse(thumb, 1.0f);
+                return;
+            }
+
+            const auto track = juce::Rectangle<float>((float) x + (float) width * 0.50f - 2.1f, (float) y + 7.0f,
+                                                      4.2f, (float) height - 14.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.84f));
+            g.fillRoundedRectangle(track.expanded(2.6f, 1.7f), 4.0f);
+            g.setColour(kGoldDim.withAlpha(0.90f));
+            g.drawRoundedRectangle(track.expanded(2.6f, 1.7f), 4.0f, 0.8f);
+            const float fillY = juce::jlimit(track.getY(), track.getBottom(), sliderPos);
+            g.setColour(kPurple.withAlpha(0.80f));
+            g.fillRoundedRectangle(juce::Rectangle<float>(track.getX(), fillY, track.getWidth(), track.getBottom() - fillY), 2.0f);
+            const auto thumb = juce::Rectangle<float>((float) x + (float) width * 0.50f - 15.0f, sliderPos - 15.0f, 30.0f, 30.0f);
+            juce::ColourGradient brass(juce::Colour(0xfff4dbac), thumb.getTopLeft(),
+                                       juce::Colour(0xff745034), thumb.getBottomRight(), false);
+            g.setGradientFill(brass);
+            g.fillEllipse(thumb);
+            g.setColour(kGold.withAlpha(0.92f));
+            g.drawEllipse(thumb, 1.0f);
         }
 
         void drawComboBox(juce::Graphics& g, int width, int height, bool isDown,
                           int, int, int, int, juce::ComboBox& box) override
         {
-            auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height).reduced(1.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.fillRoundedRectangle(bounds, 7.0f);
-            g.setColour((isDown || box.isMouseOver()) ? kGold : kGoldDim);
-            g.drawRoundedRectangle(bounds, 7.0f, isDown ? 1.8f : 1.0f);
-            g.setColour(kPurple.withAlpha(isDown ? 0.75f : 0.25f));
-            g.drawRoundedRectangle(bounds.reduced(3.0f), 5.0f, 0.8f);
+            if (isReferenceOverlay(box))
+                return;
+
+            const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height).reduced(1.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.87f));
+            g.fillRoundedRectangle(bounds, 5.5f);
+            g.setColour(kGoldDim.withAlpha(0.94f));
+            g.drawRoundedRectangle(bounds, 5.5f, isDown || box.isMouseOver() ? 1.55f : 1.0f);
+            g.setColour(kGold.withAlpha(0.48f));
+            g.drawRoundedRectangle(bounds.reduced(3.0f), 3.8f, 0.65f);
 
             juce::Path arrow;
-            const float ax = (float) width - 18.0f;
+            const float ax = (float) width - 19.0f;
             const float ay = (float) height * 0.5f - 2.0f;
             arrow.startNewSubPath(ax - 5.0f, ay);
             arrow.lineTo(ax + 5.0f, ay);
@@ -146,35 +244,32 @@ namespace
         void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                               bool isHighlighted, bool) override
         {
-            auto box = juce::Rectangle<float>(4.0f, 3.0f, 20.0f, 20.0f);
+            const auto box = juce::Rectangle<float>(4.0f, 3.0f, 26.0f, 26.0f);
             const bool on = button.getToggleState();
-            g.setColour(juce::Colours::black.withAlpha(0.78f));
-            g.fillRoundedRectangle(box, 4.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.92f));
+            g.fillRoundedRectangle(box, 3.0f);
             g.setColour(on ? kPurple : (isHighlighted ? kGold : kGoldDim));
-            g.drawRoundedRectangle(box, 4.0f, on ? 1.8f : 1.0f);
-
+            g.drawRoundedRectangle(box, 3.0f, on ? 1.7f : 1.0f);
             if (on)
             {
-                g.setColour(kPurple.withAlpha(0.20f));
+                g.setColour(kPurple.withAlpha(0.22f));
                 g.fillRoundedRectangle(box.reduced(2.0f), 2.0f);
                 juce::Path tick;
-                tick.startNewSubPath(8.0f, 13.0f);
-                tick.lineTo(12.0f, 17.0f);
-                tick.lineTo(20.0f, 8.0f);
-                g.setColour(kPurple.brighter(0.25f));
-                g.strokePath(tick, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                tick.startNewSubPath(8.0f, 15.0f);
+                tick.lineTo(13.0f, 20.0f);
+                tick.lineTo(23.0f, 9.0f);
+                g.setColour(kPurple.brighter(0.28f));
+                g.strokePath(tick, juce::PathStrokeType(2.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
-
-            g.setColour(on ? kText : kTextDim);
-            g.setFont(displayFont(14.5f));
-            g.drawText(button.getButtonText(), 31, 0, button.getWidth() - 31, button.getHeight(),
-                       juce::Justification::centredLeft, true);
         }
 
         void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour&,
                                   bool highlighted, bool down) override
         {
-            auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
+            if (isReferenceOverlay(button))
+                return;
+
+            const auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
             const bool on = button.getToggleState();
             g.setColour(juce::Colours::black.withAlpha(0.73f));
             g.fillRoundedRectangle(bounds, 6.0f);
@@ -186,6 +281,14 @@ namespace
                 g.fillRoundedRectangle(juce::Rectangle<float>(bounds.getX() + 10.0f, bounds.getBottom() - 3.0f,
                                                                bounds.getWidth() - 20.0f, 1.6f), 1.0f);
             }
+        }
+
+        void drawButtonText(juce::Graphics& g, juce::TextButton& button,
+                            bool highlighted, bool down) override
+        {
+            if (isReferenceOverlay(button))
+                return;
+            juce::LookAndFeel_V4::drawButtonText(g, button, highlighted, down);
         }
 
         juce::Font getTextButtonFont(juce::TextButton&, int height) override
@@ -201,10 +304,10 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     mirrorLookAndFeel = std::make_unique<MirrorLookAndFeel>();
     setLookAndFeel(mirrorLookAndFeel.get());
     setOpaque(true);
-    setResizable(true, true);
-    // The visual system is authored at the exact 1723×913 reference canvas,
-    // then scales down proportionally for smaller DAW windows.
-    setResizeLimits(1280, 680, 1723, 913);
+    // The supplied visual specification is a fixed studio canvas. Keeping it
+    // fixed preserves the 1:1 proportions instead of shrinking the panels
+    // into a generic plug-in layout.
+    setResizable(false, false);
 
     configureLabel(titleLabel, mirrorText("MIRROR"), 42.0f, false);
     titleLabel.setFont(displayFont(42.0f));
@@ -219,8 +322,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     for (auto* button : { &mainPageButton, &harmonyPageButton, &advancedButton })
     {
         button->setClickingTogglesState(true);
-        button->setColour(juce::TextButton::textColourOffId, kTextDim);
-        button->setColour(juce::TextButton::textColourOnId, kText);
+        button->setComponentID("reference-overlay");
         addAndMakeVisible(button);
     }
     mainPageButton.setButtonText("Main");
@@ -286,10 +388,19 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     presetBox.addItem("Vocoder Glass", 1);
     presetBox.addItem("Fractured Stack", 2);
     presetBox.addItem("Stadium Choir", 3);
-    presetBox.setSelectedId(1, juce::dontSendNotification);
+    // The supplied canvas already contains the precise PЯeset caption.
+    // An empty initial selection keeps the startup appearance 1:1, while
+    // a chosen preset is still shown normally afterwards.
+    presetBox.setTextWhenNothingSelected(juce::String());
+    presetBox.setSelectedId(0, juce::dontSendNotification);
     presetBox.onChange = [this] { applyPreset(presetBox.getSelectedId()); };
     configureLabel(presetLabel, "PЯESET", 11.0f, false);
     addAndMakeVisible(presetLabel);
+
+    // Exact artwork handles the static chrome; these remain transparent
+    // hit targets with live values and menus on top.
+    for (auto* box : { &modeBox, &rootBox, &scaleBox, &presetBox })
+        box->setComponentID("reference-overlay");
 
     setupKnob(trackingKnob, "tracking", "TЯACKING");
     setupKnob(glideKnob, "glide", "TЯANSITION");
@@ -368,7 +479,7 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& column, int voice
     column.title.setColour(juce::Label::textColourId, kText);
     addAndMakeVisible(column.title);
 
-    column.enableButton.setButtonText("ON");
+    column.enableButton.setButtonText("");
     column.enableButton.setTooltip("Aktiver Voice " + index);
     addAndMakeVisible(column.enableButton);
     column.enableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(audioProcessor.apvts, "voiceEnable" + index, column.enableButton);
@@ -531,57 +642,65 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
 {
     const bool main = currentPage == 0;
     const bool harmony = currentPage == 1;
-    const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
 
+    // Titles, panel labels and navigation are deliberately baked into the
+    // three supplied reference canvases. Only functional controls are
+    // overlaid, which prevents duplicate or mismatched typography.
+    for (auto* label : { &titleLabel, &creditLabel, &modeLabel, &rootLabel, &scaleLabel,
+                         &presetLabel, &vocalRangeLabel, &harmonyStyleLabel,
+                         &midiVoicingLabel, &midiInversionLabel })
+        label->setVisible(false);
+
+    mainPageButton.setVisible(true);
+    harmonyPageButton.setVisible(true);
     advancedButton.setVisible(harmony);
-    const bool midiMode = mode == 1;
-    // Manual and MIDI share the exact same three-control header footprint:
-    // MIDI deliberately substitutes Voicing/Inversion for Key/Scale instead
-    // of adding a second utilitarian row that breaks the reference layout.
-    rootBox.setVisible(!midiMode);
-    rootLabel.setVisible(!midiMode);
-    scaleBox.setVisible(!midiMode);
-    scaleLabel.setVisible(!midiMode);
+
+    modeBox.setVisible(true);
+    rootBox.setVisible(true);
+    scaleBox.setVisible(true);
+    presetBox.setVisible(true);
+
     vocalRangeBox.setVisible(false);
-    vocalRangeLabel.setVisible(false);
     harmonyStyleBox.setVisible(false);
-    harmonyStyleLabel.setVisible(false);
-    presetLabel.setVisible(false);
-    midiVoicingBox.setVisible(midiMode);
-    midiVoicingLabel.setVisible(midiMode);
-    midiInversionBox.setVisible(midiMode);
-    midiInversionLabel.setVisible(midiMode);
+    midiVoicingBox.setVisible(false);
+    midiInversionBox.setVisible(false);
+    freezeButton.setVisible(false);
 
     auto showKnob = [main](KnobWithLabel& knob)
     {
         knob.slider.setVisible(main);
-        knob.label.setVisible(main);
+        knob.label.setVisible(false);
     };
     for (auto* knob : { &trackingKnob, &glideKnob, &dryLevelKnob, &dryPanKnob, &dryFormantKnob,
                         &dryPitchKnob, &dryWidthKnob, &humanizeKnob, &characterKnob, &spreadKnob,
                         &ambienceKnob, &harmonyMixKnob, &globalSaturationKnob, &outputGainKnob })
         showKnob(*knob);
-    freezeButton.setVisible(main);
 
     for (auto& column : voiceColumns)
     {
-        column.title.setVisible(harmony);
-        column.enableButton.setVisible(harmony);
+        column.title.setVisible(false);
+        column.enableButton.setVisible(harmony && !showAdvanced);
         column.soloButton.setVisible(false);
-        // Interval is a primary musical choice, not a hidden host-only
-        // parameter.  It is placed discretely inside every voice panel.
+
+        // The screenshots are the visual canvas; the selected musical
+        // interval remains a compact functional control inside each panel.
         column.intervalBox.setVisible(harmony);
-        for (auto* component : { (juce::Component*) &column.levelSlider, (juce::Component*) &column.levelLabel,
-                                 (juce::Component*) &column.panSlider, (juce::Component*) &column.panLabel,
-                                 (juce::Component*) &column.formantSlider, (juce::Component*) &column.formantLabel })
-            component->setVisible(harmony);
-        for (auto* component : { (juce::Component*) &column.fineTuneSlider, (juce::Component*) &column.fineTuneLabel,
-                                 (juce::Component*) &column.toneSlider, (juce::Component*) &column.toneLabel,
-                                 (juce::Component*) &column.saturationSlider, (juce::Component*) &column.saturationLabel,
-                                 (juce::Component*) &column.microDelaySlider, (juce::Component*) &column.microDelayLabel,
-                                 (juce::Component*) &column.vibratoSlider, (juce::Component*) &column.vibratoLabel,
-                                 (juce::Component*) &column.vibratoRateSlider, (juce::Component*) &column.vibratoRateLabel })
+
+        column.levelSlider.setVisible(harmony);
+        column.levelLabel.setVisible(false);
+        column.panSlider.setVisible(harmony);
+        column.panLabel.setVisible(false);
+        column.formantSlider.setVisible(harmony);
+        column.formantLabel.setVisible(false);
+
+        for (auto* component : { (juce::Component*) &column.fineTuneSlider, (juce::Component*) &column.toneSlider,
+                                 (juce::Component*) &column.saturationSlider, (juce::Component*) &column.microDelaySlider,
+                                 (juce::Component*) &column.vibratoSlider, (juce::Component*) &column.vibratoRateSlider })
             component->setVisible(harmony && showAdvanced);
+
+        for (auto* label : { &column.fineTuneLabel, &column.toneLabel, &column.saturationLabel,
+                             &column.microDelayLabel, &column.vibratoLabel, &column.vibratoRateLabel })
+            label->setVisible(false);
     }
 }
 
@@ -605,45 +724,31 @@ void MirrorAudioProcessorEditor::resized()
     const float sy = (float) getHeight() / referenceHeight;
     const auto rect = [sx, sy](float x, float y, float w, float h)
     {
-        return juce::Rectangle<int>(
-            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
-            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+        return juce::Rectangle<int>(juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+                                    juce::roundToInt(w * sx), juce::roundToInt(h * sy));
     };
 
-    titleLabel.setBounds(rect(50, 30, 370, 84));
-    creditLabel.setBounds(rect(50, 118, 310, 30));
-    presetLabel.setBounds(0, -30, 1, 1);
+    // Exact hit areas over the reference artwork.
     presetBox.setBounds(rect(50, 183, 230, 47));
-
-    modeLabel.setBounds(rect(775, 26, 220, 32));
     modeBox.setBounds(rect(774, 67, 220, 49));
-    rootLabel.setBounds(rect(1248, 26, 210, 32));
     rootBox.setBounds(rect(1252, 67, 210, 49));
-    scaleLabel.setBounds(rect(1490, 26, 210, 32));
     scaleBox.setBounds(rect(1493, 67, 210, 49));
-
     mainPageButton.setBounds(rect(624, 134, 240, 47));
     harmonyPageButton.setBounds(rect(868, 134, 242, 47));
-
-    // MIDI substitutes Voicing/Inversion into the same Key/Scale positions.
-    // This keeps MIDI fully controllable without disturbing the reference canvas.
-    midiVoicingLabel.setBounds(rect(1248, 26, 210, 32));
-    midiVoicingBox.setBounds(rect(1252, 67, 210, 49));
-    midiInversionLabel.setBounds(rect(1490, 26, 210, 32));
-    midiInversionBox.setBounds(rect(1493, 67, 210, 49));
     advancedButton.setBounds(rect(774, 191, 180, 39));
 
-    vocalRangeLabel.setBounds(0, -30, 1, 1);
-    vocalRangeBox.setBounds(0, -30, 1, 1);
-    harmonyStyleLabel.setBounds(0, -30, 1, 1);
-    harmonyStyleBox.setBounds(0, -30, 1, 1);
+    vocalRangeBox.setBounds(-100, -100, 1, 1);
+    harmonyStyleBox.setBounds(-100, -100, 1, 1);
+    midiVoicingBox.setBounds(-100, -100, 1, 1);
+    midiInversionBox.setBounds(-100, -100, 1, 1);
+    freezeButton.setBounds(-100, -100, 1, 1);
 
-    const auto body = rect(0, 232, referenceWidth, referenceHeight - 232);
     if (currentPage == 0)
-        layoutMain(body);
+        layoutMain(getLocalBounds());
     else
-        layoutHarmony(body);
+        layoutHarmony(getLocalBounds());
 }
+
 void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int>)
 {
     constexpr float referenceWidth = 1723.0f;
@@ -652,12 +757,10 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int>)
     const float sy = (float) getHeight() / referenceHeight;
     const auto rect = [sx, sy](float x, float y, float w, float h)
     {
-        return juce::Rectangle<int>(
-            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
-            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+        return juce::Rectangle<int>(juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+                                    juce::roundToInt(w * sx), juce::roundToInt(h * sy));
     };
 
-    // Directly trace the three supplied Main reference panels.
     dryPanelBounds = rect(58, 273, 420, 580);
     characterPanelBounds = rect(1264, 273, 406, 580);
     mirrorBounds = rect(487, 212, 770, 257);
@@ -689,7 +792,6 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int>)
     placePair(trackingKnob, glideKnob, row1);
     placePair(humanizeKnob, characterKnob, row2);
     placePair(ambienceKnob, spreadKnob, row3);
-    freezeButton.setBounds(rect(1370, 802, 182, 28));
 
     auto output = outputPanelBounds.reduced(62, 86);
     auto knobs = output.removeFromTop(112);
@@ -697,44 +799,43 @@ void MirrorAudioProcessorEditor::layoutMain(juce::Rectangle<int>)
     placeKnob(globalSaturationKnob, glue.reduced(20, 0));
     placeKnob(outputGainKnob, knobs.reduced(20, 0));
     auto mix = output.reduced(8, 0);
-    harmonyMixKnob.label.setBounds(mix.removeFromTop(24));
-    harmonyMixKnob.slider.setBounds(mix.removeFromTop(42).reduced(6, 6));
+    harmonyMixKnob.label.setBounds(-100, -100, 1, 1);
+    harmonyMixKnob.slider.setBounds(mix.removeFromTop(56).reduced(6, 7));
 }
+
 void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int>)
 {
-    constexpr float referenceWidth = 1730.0f;
-    constexpr float referenceHeight = 909.0f;
+    const float referenceWidth = showAdvanced ? 1701.0f : 1730.0f;
+    const float referenceHeight = showAdvanced ? 925.0f : 909.0f;
     const float sx = (float) getWidth() / referenceWidth;
     const float sy = (float) getHeight() / referenceHeight;
     const auto rect = [sx, sy](float x, float y, float w, float h)
     {
-        return juce::Rectangle<int>(
-            juce::roundToInt(x * sx), juce::roundToInt(y * sy),
-            juce::roundToInt(w * sx), juce::roundToInt(h * sy));
+        return juce::Rectangle<int>(juce::roundToInt(x * sx), juce::roundToInt(y * sy),
+                                    juce::roundToInt(w * sx), juce::roundToInt(h * sy));
     };
 
-    const float panelY = showAdvanced ? 338.0f : 367.0f;
-    const float panelH = showAdvanced ? 525.0f : 500.0f;
+    const float panelY = showAdvanced ? 337.0f : 367.0f;
+    const float panelH = showAdvanced ? 530.0f : 500.0f;
 
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
         const float offset = (float) i * 410.0f;
         auto& column = voiceColumns[(size_t) i];
 
-        column.enableButton.setBounds(rect(215 + offset, 257, 82, 30));
-        column.title.setBounds(rect(138 + offset, 300, 270, 42));
+        // Checkbox only: its “On” caption is preserved exactly in the artwork.
+        column.enableButton.setBounds(rect(215 + offset, 257, 38, 30));
+        column.title.setBounds(-100, -100, 1, 1);
         voiceLevelBounds[(size_t) i] = rect(62 + offset, panelY + 4, 30, panelH - 10);
-        column.levelLabel.setBounds(rect(51 + offset, panelY - 22, 58, 18));
+        column.levelLabel.setBounds(-100, -100, 1, 1);
         column.levelSlider.setBounds(voiceLevelBounds[(size_t) i]);
-
         voicePanelBounds[(size_t) i] = rect(140 + offset, panelY, 264, panelH);
-        column.soloButton.setBounds(-200, -200, 1, 1);
+        column.soloButton.setBounds(-100, -100, 1, 1);
 
-        // The interval is restored as a compact, readable musical selector.
-        // In Advanced it sits above the rows; in the simple view it uses the
-        // deliberately open space in the lower panel.
-        const float intervalY = showAdvanced ? panelY + 42.0f : panelY + 235.0f;
-        column.intervalBox.setBounds(rect(166 + offset, intervalY, 212, 32));
+        // The harmony interval is a required functional addition. It occupies
+        // open glass space without moving any reference artwork.
+        const float intervalY = showAdvanced ? panelY + 18.0f : panelY + 218.0f;
+        column.intervalBox.setBounds(rect(166 + offset, intervalY, 212, 30));
 
         auto inner = voicePanelBounds[(size_t) i].reduced(18, showAdvanced ? 82 : 58);
         auto placePair = [this](juce::Slider& a, juce::Label& aLabel, juce::Slider& b, juce::Label& bLabel,
@@ -764,6 +865,7 @@ void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int>)
         }
     }
 }
+
 void MirrorAudioProcessorEditor::timerCallback()
 {
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
@@ -792,39 +894,30 @@ void MirrorAudioProcessorEditor::timerCallback()
 void MirrorAudioProcessorEditor::paint(juce::Graphics& g)
 {
     drawBackground(g);
-    drawHeader(g);
-    if (currentPage == 0)
-        drawMainPanels(g);
-    else
-        drawHarmonyPanels(g);
 }
 
 void MirrorAudioProcessorEditor::drawBackground(juce::Graphics& g) const
 {
-    const auto bounds = getLocalBounds().toFloat();
     g.fillAll(kInk);
+    const juce::Image& reference = currentPage == 0
+        ? referenceMainImage()
+        : (showAdvanced ? referenceAdvancedImage() : referenceHarmonyImage());
 
-    const auto& texture = engravedBackgroundTexture();
-    if (texture.isValid())
+    if (reference.isValid())
     {
-        g.setOpacity(0.68f);
-        g.drawImageWithin(texture, 0, 0, getWidth(), getHeight(),
+        g.drawImageWithin(reference, 0, 0, getWidth(), getHeight(),
                           juce::RectanglePlacement::stretchToFit, false);
-        g.setOpacity(1.0f);
+        return;
     }
 
-    // A restrained vignette preserves the engraved depth while keeping
-    // foreground controls legible at every supported UI scale.
-    juce::ColourGradient vignette(juce::Colours::transparentBlack, bounds.getCentreX(), bounds.getCentreY(),
-                                  juce::Colours::black.withAlpha(0.58f), bounds.getRight(), bounds.getBottom(), true);
-    g.setGradientFill(vignette);
-    g.fillRect(bounds);
-
-    g.setColour(kGoldDim.withAlpha(0.58f));
-    g.drawRoundedRectangle(bounds.reduced(4.0f), 5.0f, 1.0f);
-    g.setColour(kGold.withAlpha(0.20f));
-    g.drawRoundedRectangle(bounds.reduced(8.0f), 3.0f, 0.65f);
+    // A build without the binary resource remains usable, but release builds
+    // always use the supplied visual specification above.
+    const auto& fallback = engravedBackgroundTexture();
+    if (fallback.isValid())
+        g.drawImageWithin(fallback, 0, 0, getWidth(), getHeight(),
+                          juce::RectanglePlacement::stretchToFit, false);
 }
+
 void MirrorAudioProcessorEditor::drawHeader(juce::Graphics& g) const
 {
     constexpr float referenceWidth = 1723.0f;

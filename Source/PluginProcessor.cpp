@@ -79,7 +79,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     addBipolar("dryPan", "Dry Pan", 0.0f);
     addBipolar("dryFormant", "Dry Formant", 0.0f);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("st")));
+        juce::ParameterID{ "dryPitch", 1 }, "Dry Pitch", Range(-12.0f, 12.0f, 0.01f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("st")));
     add01("dryWidth", "Dry Width", 0.5f);
 
     // --- HARMONY (4 stemmer) ---
@@ -124,7 +125,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceFineTune" + idx, 1 }, "Voice " + idx + " Fine Tune",
-            Range(-50.0f, 50.0f, 0.1f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("cents")));
+            Range(-50.0f, 50.0f, 0.1f), 0.0f,
+            juce::AudioParameterFloatAttributes().withLabel("cents")));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceTone" + idx, 1 }, "Voice " + idx + " Tone",
@@ -136,7 +138,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceMicroDelay" + idx, 1 }, "Voice " + idx + " Micro Delay",
-            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i], juce::AudioParameterFloatAttributes().withLabel("ms")));
+            Range(0.0f, 45.0f, 0.1f), defaultMicroDelayMs[i],
+            juce::AudioParameterFloatAttributes().withLabel("ms")));
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "voiceVibrato" + idx, 1 }, "Voice " + idx + " Vibrato",
@@ -158,9 +161,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     // --- MIX ---
     add01("harmony", "Harmony", 0.5f);
     add01("globalSaturation", "Global Saturation", 0.0f);
+    // Dedicated final trim. It is neutral at 0 dB and runs after colour,
+    // before the safety limiter, so it cannot change the proven default tone.
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "outputGain", 1 }, "Output Gain",
-        Range(-18.0f, 12.0f, 0.01f), 0.0f, juce::AudioParameterFloatAttributes().withLabel("dB")));
+        Range(-18.0f, 12.0f, 0.01f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")));
 
     return { params.begin(), params.end() };
 }
@@ -195,7 +201,6 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
         voiceRatioSmoothed[(size_t) i] = 1.0f;
         voiceVibratoPhase[(size_t) i] = (float) i * 0.91f;
         voiceLastMidi[(size_t) i] = 69.0f + (float) i * 3.0f;
-        voiceGates[(size_t) i] = 0.0f;
     }
 
     globalSaturatorL.prepare(sampleRate);
@@ -213,14 +218,10 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     midiAssignmentsDirty = true;
     lastMidiVoicing = lastMidiInversion = -1;
     lastHandledPitchRevision = pitchDetector.getRevision();
-    lastStableInputFrequency = 180.0f;
-    lastStableInputMidi = 57;
     harmonyVoicing = 0.0f;
     inputEnvelope = 0.0f;
     voicingAttackCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.012));
     voicingReleaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.065));
-    voiceGateAttackCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.010));
-    voiceGateReleaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.040));
 
     dryLevelSmoothed.reset(sampleRate, 0.03);
     harmonyLevelSmoothed.reset(sampleRate, 0.03);
@@ -279,10 +280,6 @@ void MirrorAudioProcessor::rebuildMidiAssignments(int midiVoicing, int midiInver
         chordVelocities[(size_t) j] = heldNoteVelocities[(size_t) j];
     }
 
-    // Inversions operate on the actual held chord, then the chord is copied
-    // across a deliberately symmetric octave palette.  The prior allocator
-    // only expanded upward from the held notes, so a vocal below the chord
-    // could be sent to an arbitrary high/low target on the first note.
     const int inversion = midiInversion == 0 ? 0 : midiInversion - 1;
     for (int r = 0; r < inversion && numHeldNotes > 1; ++r)
     {
@@ -297,64 +294,34 @@ void MirrorAudioProcessor::rebuildMidiAssignments(int midiVoicing, int midiInver
         chordVelocities[(size_t) (numHeldNotes - 1)] = movedVelocity;
     }
 
-    static constexpr int octavesBelow = 3;
-    static constexpr int octavesAbove = 4;
-    static constexpr int paletteCapacity = kMaxHeldNotes * (octavesBelow + octavesAbove + 1);
-    std::array<int, paletteCapacity> paletteNotes {};
-    std::array<float, paletteCapacity> paletteVelocities {};
-    int paletteSize = 0;
-    for (int octave = -octavesBelow; octave <= octavesAbove; ++octave)
-        for (int j = 0; j < numHeldNotes; ++j)
-        {
-            paletteNotes[(size_t) paletteSize] = juce::jlimit(0, 127, chordNotes[(size_t) j] + 12 * octave);
-            paletteVelocities[(size_t) paletteSize] = chordVelocities[(size_t) j];
-            ++paletteSize;
-        }
+    std::array<int, kMaxHeldNotes> paletteNotes {};
+    std::array<float, kMaxHeldNotes> paletteVelocities {};
+    for (int p = 0; p < kMaxHeldNotes; ++p)
+    {
+        const int chordIndex = p % numHeldNotes;
+        int octave = p / numHeldNotes;
+        if (midiVoicing == 1 && chordIndex > 0)
+            ++octave;
+        else if (midiVoicing == 2)
+            octave += p / 2;
+        paletteNotes[(size_t) p] = chordNotes[(size_t) chordIndex] + 12 * octave;
+        paletteVelocities[(size_t) p] = chordVelocities[(size_t) chordIndex];
+    }
 
-    // Open/Wide move the voice anchors apart before nearest-note selection,
-    // while each individual Voice Interval still determines its musical role.
-    static constexpr float registerSpread[] = { 0.0f, 2.5f, 5.0f };
-    const float spread = registerSpread[juce::jlimit(0, 2, midiVoicing)];
-
-    // Claim by actual MIDI pitch, not by palette slot. The same pitch can
-    // occur in more than one palette slot when an input chord spans octaves;
-    // letting two generated voices select it creates an obvious doubled,
-    // comb-filtered sound rather than a clean vocal stack.
-    std::array<bool, 128> claimedPitches {};
+    std::array<bool, kMaxHeldNotes> claimed {};
     for (int v = 0; v < kNumHarmonyVoices; ++v)
     {
-        const int intervalIndex = juce::jlimit(0, kNumMusicalIntervals - 1,
-            (int) *apvts.getRawParameterValue("voiceInterval" + juce::String(v + 1)));
-        const float intervalTarget = (float) lastStableInputMidi
-            + (float) kMusicalIntervals[(size_t) intervalIndex].semitones
-            + ((float) v - 1.5f) * spread;
-
-        // During a held chord we favour the last assigned register, but on
-        // a fresh chord the interval-aware anchor establishes a natural stack.
-        const float desired = std::abs(voiceLastMidi[(size_t) v] - intervalTarget) < 18.0f
-            ? voiceLastMidi[(size_t) v]
-            : intervalTarget;
-
         int bestIndex = -1;
-        float bestDistance = std::numeric_limits<float>::max();
-        for (int p = 0; p < paletteSize; ++p)
+        float bestDistance = 1.0e9f;
+        for (int p = 0; p < kMaxHeldNotes; ++p)
         {
-            const int candidateNote = paletteNotes[(size_t) p];
-            if (claimedPitches[(size_t) candidateNote])
-                continue;
-            const float distance = std::abs((float) candidateNote - desired);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestIndex = p;
-            }
+            if (claimed[(size_t) p]) continue;
+            const float distance = std::abs((float) paletteNotes[(size_t) p] - voiceLastMidi[(size_t) v]);
+            if (distance < bestDistance) { bestDistance = distance; bestIndex = p; }
         }
-
-        if (bestIndex < 0)
-            bestIndex = 0;
-
+        if (bestIndex < 0) bestIndex = 0;
+        claimed[(size_t) bestIndex] = true;
         midiAssignedNotes[(size_t) v] = paletteNotes[(size_t) bestIndex];
-        claimedPitches[(size_t) midiAssignedNotes[(size_t) v]] = true;
         midiAssignedVelocities[(size_t) v] = paletteVelocities[(size_t) bestIndex];
         midiAssignedFrequencies[(size_t) v] = PitchCorrector::midiToFreq(midiAssignedNotes[(size_t) v]);
         voiceLastMidi[(size_t) v] = (float) midiAssignedNotes[(size_t) v];
@@ -367,19 +334,7 @@ void MirrorAudioProcessor::handleMidiMessage(const juce::MidiMessage& m)
     if (m.isNoteOn())
     {
         const int note = juce::jlimit(0, 127, m.getNoteNumber());
-        const bool beginningNewChord = numHeldNotes == 0;
         physicalKeys[(size_t) note] = true;
-
-        if (beginningNewChord)
-        {
-            for (int v = 0; v < kNumHarmonyVoices; ++v)
-            {
-                const int intervalIndex = juce::jlimit(0, kNumMusicalIntervals - 1,
-                    (int) *apvts.getRawParameterValue("voiceInterval" + juce::String(v + 1)));
-                voiceLastMidi[(size_t) v] = (float) (lastStableInputMidi
-                    + kMusicalIntervals[(size_t) intervalIndex].semitones);
-            }
-        }
 
         for (int i = 0; i < numHeldNotes; ++i)
         {
@@ -576,11 +531,6 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
 
         float dryL = channelL[n];
         float dryR = inputChannels > 1 ? channelR[n] : dryL;
-        // Hosts should never pass invalid samples, but preventing one bad
-        // sample from entering the delay/grain histories avoids a persistent
-        // crackle or silence if a graph upstream is briefly unstable.
-        if (!std::isfinite(dryL)) dryL = 0.0f;
-        if (!std::isfinite(dryR)) dryR = 0.0f;
         float monoIn = 0.5f * (dryL + dryR);
 
         voiceBuffer.write(monoIn);
@@ -657,16 +607,11 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         if (pitchRevision != lastHandledPitchRevision)
         {
             lastHandledPitchRevision = pitchRevision;
-            if (detectedFreq > 35.0f && confidence > 0.40f)
+            if (detectedFreq > 20.0f)
             {
-                // A gentle detector-side slew gives granular pitch marks a
-                // stable source reference in MIDI mode without freezing
-                // expressive vocal movement.
-                lastStableInputFrequency += (detectedFreq - lastStableInputFrequency) * 0.28f;
-                lastStableInputMidi = juce::jlimit(0, 127, (int) std::round(
-                    69.0f + 12.0f * std::log2(lastStableInputFrequency / 440.0f)));
-                lastStableBaseMidi = PitchCorrector::nearestScaleMidi(
-                    lastStableInputFrequency, rootNote, scaleType);
+                const int rawBaseMidi = PitchCorrector::nearestScaleMidi(detectedFreq, rootNote, scaleType);
+                if (confidence > 0.45f)
+                    lastStableBaseMidi = rawBaseMidi;
             }
         }
         if (mode == 0 && scaleType != PitchCorrector::Chromatic
@@ -676,44 +621,42 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         for (int i = 0; i < kNumHarmonyVoices; ++i)
         {
             bool active = vp[(size_t) i].enable && (!anySolo || vp[(size_t) i].solo);
+
             if (mode == 1 && numHeldNotes == 0)
                 active = false;
 
-            const float gateTarget = active ? 1.0f : 0.0f;
-            const float gateCoeff = gateTarget > voiceGates[(size_t) i]
-                ? voiceGateAttackCoeff : voiceGateReleaseCoeff;
-            voiceGates[(size_t) i] += (gateTarget - voiceGates[(size_t) i]) * gateCoeff;
-
-            if (!active && voiceGates[(size_t) i] < 1.0e-4f)
+            if (!active)
             {
                 voiceRatioSmoothed[(size_t) i] += (1.0f - voiceRatioSmoothed[(size_t) i]) * glideCoeff;
                 continue;
             }
 
             auto hz = harmonyHumanize[(size_t) i].tick(humanizeAmt);
+            // ±15 cents of drift and ±16 cents of vibrato are accurate enough
+            // with this linear conversion, avoiding four exp/pow calls per
+            // sample while retaining inaudible error at these tiny depths.
             constexpr float centsToRatio = 0.0005777895f;
             const float driftRatio = juce::jmax(0.5f, 1.0f + hz.pitchCents * centsToRatio);
 
-            // In MIDI mode use the stable detector reference instead of the
-            // instantaneous detector frame.  That prevents tiny tracker
-            // changes from re-tuning all MIDI voices every sample.
-            float targetRatio = voiceRatioSmoothed[(size_t) i];
-            if (active && mode == 0)
+            float targetRatio = 1.0f;
+            if (mode == 0)
             {
                 if (scaleType == PitchCorrector::Chromatic)
                     targetRatio = leadRatio * chromaticRatios[(size_t) i] * driftRatio;
-                else if (lastStableInputFrequency > 35.0f)
+                else if (detectedFreq > 20.0f)
                     targetRatio = manualScaleFrequencies[(size_t) i] * fineTuneRatios[(size_t) i]
-                                * driftRatio / lastStableInputFrequency;
+                                * driftRatio / detectedFreq;
             }
-            else if (active && lastStableInputFrequency > 35.0f)
+            else if (detectedFreq > 20.0f)
             {
                 targetRatio = midiAssignedFrequencies[(size_t) i] * fineTuneRatios[(size_t) i]
-                            * driftRatio / lastStableInputFrequency;
+                            * driftRatio / detectedFreq;
             }
 
             voiceRatioSmoothed[(size_t) i] += (targetRatio - voiceRatioSmoothed[(size_t) i]) * glideCoeff;
 
+            // Vibrato is a continuous sine modulation, deliberately separate
+            // from Humanize's random drift to avoid zipper/saw artefacts.
             float readRatio = voiceRatioSmoothed[(size_t) i];
             if (vp[(size_t) i].vibrato > 1.0e-4f)
             {
@@ -725,32 +668,20 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
                     voiceVibratoPhase[(size_t) i] -= juce::MathConstants<float>::twoPi;
                 const float vibratoCents = std::sin(voiceVibratoPhase[(size_t) i])
                     * vp[(size_t) i].vibrato * 16.0f;
-                readRatio *= juce::jmax(0.5f, 1.0f + vibratoCents * centsToRatio);
+                readRatio *= juce::jmax(0.5f, 1.0f + vibratoCents * 0.0005777895f);
             }
 
-            // Grain renewal must use a stable pitch-mark radius in every mode.
-            // The instantaneous detector can briefly drop or octave-jump on
-            // consonants; using it directly here was a source of the raspy,
-            // saw-like edge reported when Character/Humanize were raised.
-            const float sourceForGrains = lastStableInputFrequency > 35.0f
-                ? lastStableInputFrequency : detectedFreq;
-            float raw = harmonyVoices[(size_t) i].process(voiceBuffer, readRatio, sourceForGrains);
-            const float shiftSemitones = 12.0f * std::log2(juce::jmax(0.01f, readRatio));
+            float raw = harmonyVoices[(size_t) i].process(voiceBuffer, readRatio, detectedFreq);
+            const float shiftSemitones = 12.0f * std::log2(
+                juce::jmax(0.01f, readRatio));
             const float formantAmount = juce::jlimit(-1.0f, 1.0f,
                 vp[(size_t) i].formant - 0.45f * shiftSemitones / 12.0f);
             raw = harmonyFormant[(size_t) i].process(raw, formantAmount);
+
+            // Colour before the final tone/de-ess stage.  This keeps the
+            // harmonic warmth while the voice EQ removes brittle by-products.
             raw = harmonySaturators[(size_t) i].process(raw, vp[(size_t) i].saturation);
             raw = harmonyFilters[(size_t) i].process(raw);
-            if (!std::isfinite(raw))
-            {
-                // Reset only the affected voice. This preserves the other
-                // harmony lines and prevents a malformed recursive state
-                // from surviving into later audio blocks.
-                harmonyFormant[(size_t) i].reset();
-                harmonySaturators[(size_t) i].reset();
-                harmonyFilters[(size_t) i].reset();
-                raw = 0.0f;
-            }
 
             raw *= (1.0f + hz.ampMod);
             if (mode == 1)
@@ -759,18 +690,22 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
                 raw *= 1.0f + midiVelocitySensitivity * (velocityGain - 1.0f);
             }
 
+            // Modulating a short fractional delay is effectively a second
+            // pitch shifter.  It was the remaining source of the sharp,
+            // saw-like artefact when Humanize was raised.  Keep Micro Delay
+            // stable; Humanize still supplies gentle pitch and level drift.
             raw = harmonyMicroDelay[(size_t) i].process(raw, vp[(size_t) i].microDelayMs);
-            raw *= harmonyVoicing * voiceGates[(size_t) i];
+            raw *= harmonyVoicing;
 
-            const float level = voiceLevelSmoothed[(size_t) i].getNextValue();
+            float level = voiceLevelSmoothed[(size_t) i].getNextValue();
             visualVoicePeaks[(size_t) i] = juce::jmax(visualVoicePeaks[(size_t) i], std::abs(raw * level));
-            const float pan = voicePanSmoothed[(size_t) i].getNextValue();
-            const float panPos = (juce::jlimit(-1.0f, 1.0f, pan) * 0.5f + 0.5f)
-                * juce::MathConstants<float>::halfPi;
+            float pan = voicePanSmoothed[(size_t) i].getNextValue();
+            float panPos = (juce::jlimit(-1.0f, 1.0f, pan) * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
 
             harmonySumL += raw * level * std::cos(panPos);
             harmonySumR += raw * level * std::sin(panPos);
         }
+
         if (ambienceAmt > 0.001f)
         {
             float diffL = ambienceApL2.process(ambienceApL1.process(harmonySumL));
@@ -783,7 +718,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float wetL = harmonySumL * harmonyLevelNow;
         float wetR = harmonySumR * harmonyLevelNow;
 
-        const float dryNow = dryLevelSmoothed.getNextValue();
+        float dryNow = dryLevelSmoothed.getNextValue();
         float outL = dryOutL * dryNow + wetL;
         float outR = dryOutR * dryNow + wetR;
 
