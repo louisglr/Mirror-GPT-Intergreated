@@ -433,7 +433,9 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     mainPageButton.setToggleState(true, juce::dontSendNotification);
     setSize(1723, 913);
     updateControlVisibility();
-    startTimerHz(30);
+    // The reference canvas is static; 10 Hz is only for host automation of
+    // the Mode parameter and avoids a needless 30 fps GUI redraw loop.
+    startTimerHz(10);
 }
 
 MirrorAudioProcessorEditor::~MirrorAudioProcessorEditor()
@@ -868,27 +870,16 @@ void MirrorAudioProcessorEditor::layoutHarmony(juce::Rectangle<int>)
 
 void MirrorAudioProcessorEditor::timerCallback()
 {
+    // Mode can be automated from the host; refresh the page state without
+    // polling meters or repainting the full 6 MB reference canvas every frame.
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
     if (mode != lastMode)
     {
         lastMode = mode;
         updateControlVisibility();
         resized();
+        repaint();
     }
-
-    for (int i = 0; i < kNumHarmonyVoices; ++i)
-    {
-        const auto index = (size_t) i;
-        const float pan = *audioProcessor.apvts.getRawParameterValue("voicePan" + juce::String(i + 1));
-        const bool enabled = *audioProcessor.apvts.getRawParameterValue("voiceEnable" + juce::String(i + 1)) > 0.5f;
-        const float targetX = 0.50f + juce::jlimit(-1.0f, 1.0f, pan) * 0.34f;
-        const float targetEnergy = enabled ? audioProcessor.currentVoiceVisualLevels[index].load() : 0.0f;
-        const float targetPresence = enabled ? 1.0f : 0.0f;
-        visualPan[index] += (targetX - visualPan[index]) * 0.11f;
-        visualEnergy[index] += (targetEnergy - visualEnergy[index]) * 0.18f;
-        visualPresence[index] += (targetPresence - visualPresence[index]) * (enabled ? 0.16f : 0.055f);
-    }
-    repaint();
 }
 
 void MirrorAudioProcessorEditor::paint(juce::Graphics& g)
