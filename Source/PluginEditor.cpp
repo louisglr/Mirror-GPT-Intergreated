@@ -337,6 +337,10 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
         showAdvanced = advancedButton.getToggleState();
         // This must run before layout: Advanced controls are deliberately
         // hidden on the simple page and were otherwise never revealed.
+        const int targetWidth = showAdvanced ? 1701 : 1730;
+        const int targetHeight = showAdvanced ? 925 : 909;
+        if (getWidth() != targetWidth || getHeight() != targetHeight)
+            setSize(targetWidth, targetHeight);
         updateControlVisibility();
         resized();
         repaint();
@@ -635,6 +639,12 @@ void MirrorAudioProcessorEditor::showPage(int pageIndex)
     currentPage = pageIndex;
     mainPageButton.setToggleState(currentPage == 0, juce::dontSendNotification);
     harmonyPageButton.setToggleState(currentPage == 1, juce::dontSendNotification);
+
+    const int targetWidth = currentPage == 0 ? 1723 : (showAdvanced ? 1701 : 1730);
+    const int targetHeight = currentPage == 0 ? 913 : (showAdvanced ? 925 : 909);
+    if (getWidth() != targetWidth || getHeight() != targetHeight)
+        setSize(targetWidth, targetHeight);
+
     updateControlVisibility();
     resized();
     repaint();
@@ -720,8 +730,9 @@ void MirrorAudioProcessorEditor::placeSmallKnob(juce::Slider& slider, juce::Labe
 
 void MirrorAudioProcessorEditor::resized()
 {
-    constexpr float referenceWidth = 1723.0f;
-    constexpr float referenceHeight = 913.0f;
+    const bool harmony = currentPage == 1;
+    const float referenceWidth = harmony ? (showAdvanced ? 1701.0f : 1730.0f) : 1723.0f;
+    const float referenceHeight = harmony ? (showAdvanced ? 925.0f : 909.0f) : 913.0f;
     const float sx = (float) getWidth() / referenceWidth;
     const float sy = (float) getHeight() / referenceHeight;
     const auto rect = [sx, sy](float x, float y, float w, float h)
@@ -730,14 +741,38 @@ void MirrorAudioProcessorEditor::resized()
                                     juce::roundToInt(w * sx), juce::roundToInt(h * sy));
     };
 
-    // Exact hit areas over the reference artwork.
-    presetBox.setBounds(rect(50, 183, 230, 47));
-    modeBox.setBounds(rect(774, 67, 220, 49));
-    rootBox.setBounds(rect(1252, 67, 210, 49));
-    scaleBox.setBounds(rect(1493, 67, 210, 49));
-    mainPageButton.setBounds(rect(624, 134, 240, 47));
-    harmonyPageButton.setBounds(rect(868, 134, 242, 47));
-    advancedButton.setBounds(rect(774, 191, 180, 39));
+    // Exact hit areas over each native reference canvas. The three sources
+    // are intentionally not stretched into a single generic window size.
+    if (!harmony)
+    {
+        presetBox.setBounds(rect(50, 183, 230, 47));
+        modeBox.setBounds(rect(774, 67, 220, 49));
+        rootBox.setBounds(rect(1252, 67, 210, 49));
+        scaleBox.setBounds(rect(1493, 67, 210, 49));
+        mainPageButton.setBounds(rect(624, 134, 240, 47));
+        harmonyPageButton.setBounds(rect(868, 134, 242, 47));
+        advancedButton.setBounds(rect(774, 191, 180, 39));
+    }
+    else if (!showAdvanced)
+    {
+        presetBox.setBounds(rect(48, 179, 229, 46));
+        modeBox.setBounds(rect(761, 75, 210, 47));
+        rootBox.setBounds(rect(1232, 77, 210, 46));
+        scaleBox.setBounds(rect(1470, 77, 210, 46));
+        mainPageButton.setBounds(rect(619, 134, 238, 47));
+        harmonyPageButton.setBounds(rect(861, 134, 230, 47));
+        advancedButton.setBounds(rect(764, 197, 203, 39));
+    }
+    else
+    {
+        presetBox.setBounds(rect(47, 175, 230, 48));
+        modeBox.setBounds(rect(742, 71, 214, 47));
+        rootBox.setBounds(rect(1220, 70, 208, 47));
+        scaleBox.setBounds(rect(1455, 70, 200, 47));
+        mainPageButton.setBounds(rect(609, 134, 232, 47));
+        harmonyPageButton.setBounds(rect(845, 134, 234, 47));
+        advancedButton.setBounds(rect(742, 190, 213, 42));
+    }
 
     vocalRangeBox.setBounds(-100, -100, 1, 1);
     harmonyStyleBox.setBounds(-100, -100, 1, 1);
