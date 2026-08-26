@@ -316,7 +316,11 @@ void MirrorAudioProcessor::rebuildMidiAssignments(int midiVoicing, int midiInver
     static constexpr float registerSpread[] = { 0.0f, 2.5f, 5.0f };
     const float spread = registerSpread[juce::jlimit(0, 2, midiVoicing)];
 
-    std::array<bool, paletteCapacity> claimed {};
+    // Claim by actual MIDI pitch, not by palette slot. The same pitch can
+    // occur in more than one palette slot when an input chord spans octaves;
+    // letting two generated voices select it creates an obvious doubled,
+    // comb-filtered sound rather than a clean vocal stack.
+    std::array<bool, 128> claimedPitches {};
     for (int v = 0; v < kNumHarmonyVoices; ++v)
     {
         const int intervalIndex = juce::jlimit(0, kNumMusicalIntervals - 1,
@@ -335,9 +339,10 @@ void MirrorAudioProcessor::rebuildMidiAssignments(int midiVoicing, int midiInver
         float bestDistance = std::numeric_limits<float>::max();
         for (int p = 0; p < paletteSize; ++p)
         {
-            if (claimed[(size_t) p])
+            const int candidateNote = paletteNotes[(size_t) p];
+            if (claimedPitches[(size_t) candidateNote])
                 continue;
-            const float distance = std::abs((float) paletteNotes[(size_t) p] - desired);
+            const float distance = std::abs((float) candidateNote - desired);
             if (distance < bestDistance)
             {
                 bestDistance = distance;
@@ -348,8 +353,8 @@ void MirrorAudioProcessor::rebuildMidiAssignments(int midiVoicing, int midiInver
         if (bestIndex < 0)
             bestIndex = 0;
 
-        claimed[(size_t) bestIndex] = true;
         midiAssignedNotes[(size_t) v] = paletteNotes[(size_t) bestIndex];
+        claimedPitches[(size_t) midiAssignedNotes[(size_t) v]] = true;
         midiAssignedVelocities[(size_t) v] = paletteVelocities[(size_t) bestIndex];
         midiAssignedFrequencies[(size_t) v] = PitchCorrector::midiToFreq(midiAssignedNotes[(size_t) v]);
         voiceLastMidi[(size_t) v] = (float) midiAssignedNotes[(size_t) v];
