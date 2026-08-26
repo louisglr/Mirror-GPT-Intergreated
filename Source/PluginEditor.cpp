@@ -20,7 +20,7 @@ namespace
     // normal R on some hosts.
     juce::Font displayFont(float size, int style = juce::Font::plain)
     {
-        return juce::Font("Times New Roman", size, style);
+        return juce::Font(juce::FontOptions("Times New Roman", size, style));
     }
 
     juce::String mirrorText(juce::String text)
@@ -195,8 +195,8 @@ namespace
     };
 }
 
-MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& processor)
-    : AudioProcessorEditor(&processor), audioProcessor(processor)
+MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mirrorProcessor)
+    : AudioProcessorEditor(&mirrorProcessor), audioProcessor(mirrorProcessor)
 {
     mirrorLookAndFeel = std::make_unique<MirrorLookAndFeel>();
     setLookAndFeel(mirrorLookAndFeel.get());
@@ -273,13 +273,13 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     configureComboBox(midiVoicingBox, "Fordeling af MIDI-akkorden");
     midiVoicingBox.addItemList({ "Close", "Open", "Wide" }, 1);
     midiVoicingAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "midiVoicing", midiVoicingBox);
-    configureLabel(midiVoicingLabel, "MIDI VOICING", 10.5f);
+    configureLabel(midiVoicingLabel, "VOICING", 15.0f);
     addAndMakeVisible(midiVoicingLabel);
 
     configureComboBox(midiInversionBox, "MIDI-inversion");
     midiInversionBox.addItemList({ "Auto", "Root", "1st", "2nd", "3rd" }, 1);
     midiInversionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "midiInversion", midiInversionBox);
-    configureLabel(midiInversionLabel, "INVEЯSION", 10.5f);
+    configureLabel(midiInversionLabel, "INVERSION", 15.0f);
     addAndMakeVisible(midiInversionLabel);
 
     configureComboBox(presetBox, "PЯeset");
@@ -318,7 +318,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& pro
     setupKnob(globalSaturationKnob, "globalSaturation", "GLUE");
     setupKnob(outputGainKnob, "outputGain", "GAIN");
 
-    modeBox.onChange = [this] { updateControlVisibility(); };
+    modeBox.onChange = [this] { updateControlVisibility(); resized(); repaint(); };
     mainPageButton.setToggleState(true, juce::dontSendNotification);
     setSize(1723, 913);
     updateControlVisibility();
@@ -384,7 +384,7 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& column, int voice
     column.intervalBox.addItemList(getIntervalNames(), 1);
     column.intervalAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "voiceInterval" + index, column.intervalBox);
 
-    auto setupSmall = [this](juce::Slider& slider, juce::Label& label, const juce::String& parameterID, const juce::String& caption)
+    auto setupSmall = [this](juce::Slider& slider, juce::Label& label, const juce::String& /*parameterID*/, const juce::String& caption)
     {
         slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
         slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -534,18 +534,23 @@ void MirrorAudioProcessorEditor::updateControlVisibility()
     const int mode = (int) *audioProcessor.apvts.getRawParameterValue("mode");
 
     advancedButton.setVisible(harmony);
-    // The visual design keeps the header as sparse as the reference panels.
-    // These remain fully automatable host parameters rather than competing
-    // with the Key/Scale/MIDI controls in the compact front panel.
+    const bool midiMode = mode == 1;
+    // Manual and MIDI share the exact same three-control header footprint:
+    // MIDI deliberately substitutes Voicing/Inversion for Key/Scale instead
+    // of adding a second utilitarian row that breaks the reference layout.
+    rootBox.setVisible(!midiMode);
+    rootLabel.setVisible(!midiMode);
+    scaleBox.setVisible(!midiMode);
+    scaleLabel.setVisible(!midiMode);
     vocalRangeBox.setVisible(false);
     vocalRangeLabel.setVisible(false);
     harmonyStyleBox.setVisible(false);
     harmonyStyleLabel.setVisible(false);
     presetLabel.setVisible(false);
-    midiVoicingBox.setVisible(mode == 1);
-    midiVoicingLabel.setVisible(mode == 1);
-    midiInversionBox.setVisible(mode == 1);
-    midiInversionLabel.setVisible(mode == 1);
+    midiVoicingBox.setVisible(midiMode);
+    midiVoicingLabel.setVisible(midiMode);
+    midiInversionBox.setVisible(midiMode);
+    midiInversionLabel.setVisible(midiMode);
 
     auto showKnob = [main](KnobWithLabel& knob)
     {
@@ -605,7 +610,6 @@ void MirrorAudioProcessorEditor::resized()
             juce::roundToInt(w * sx), juce::roundToInt(h * sy));
     };
 
-    const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
     titleLabel.setBounds(rect(50, 30, 370, 84));
     creditLabel.setBounds(rect(50, 118, 310, 30));
     presetLabel.setBounds(0, -30, 1, 1);
@@ -621,20 +625,20 @@ void MirrorAudioProcessorEditor::resized()
     mainPageButton.setBounds(rect(624, 134, 240, 47));
     harmonyPageButton.setBounds(rect(868, 134, 242, 47));
 
-    // MIDI options are only revealed after MIDI is explicitly selected, then
-    // sit beneath the navigation without colliding with the reference layout.
-    midiVoicingLabel.setBounds(rect(608, 191, 190, 22));
-    midiVoicingBox.setBounds(rect(608, 214, 190, 34));
-    midiInversionLabel.setBounds(rect(924, 191, 190, 22));
-    midiInversionBox.setBounds(rect(924, 214, 190, 34));
-    advancedButton.setBounds(rect(774, midiMode ? 260 : 191, 180, 39));
+    // MIDI substitutes Voicing/Inversion into the same Key/Scale positions.
+    // This keeps MIDI fully controllable without disturbing the reference canvas.
+    midiVoicingLabel.setBounds(rect(1248, 26, 210, 32));
+    midiVoicingBox.setBounds(rect(1252, 67, 210, 49));
+    midiInversionLabel.setBounds(rect(1490, 26, 210, 32));
+    midiInversionBox.setBounds(rect(1493, 67, 210, 49));
+    advancedButton.setBounds(rect(774, 191, 180, 39));
 
     vocalRangeLabel.setBounds(0, -30, 1, 1);
     vocalRangeBox.setBounds(0, -30, 1, 1);
     harmonyStyleLabel.setBounds(0, -30, 1, 1);
     harmonyStyleBox.setBounds(0, -30, 1, 1);
 
-    const auto body = rect(0, midiMode ? 305 : 232, referenceWidth, referenceHeight - (midiMode ? 305 : 232));
+    const auto body = rect(0, 232, referenceWidth, referenceHeight - 232);
     if (currentPage == 0)
         layoutMain(body);
     else
@@ -827,9 +831,8 @@ void MirrorAudioProcessorEditor::drawHeader(juce::Graphics& g) const
     constexpr float referenceHeight = 913.0f;
     const float sx = (float) getWidth() / referenceWidth;
     const float sy = (float) getHeight() / referenceHeight;
-    const bool midiMode = (int) *audioProcessor.apvts.getRawParameterValue("mode") == 1;
     const float activeX = currentPage == 0 ? 635.0f : 879.0f;
-    const float headerY = midiMode ? 298.0f : 228.0f;
+    const float headerY = 228.0f;
 
     g.setColour(kGoldDim.withAlpha(0.36f));
     g.drawLine(28.0f * sx, headerY * sy, (referenceWidth - 28.0f) * sx, headerY * sy, 0.75f * sx);
@@ -973,7 +976,7 @@ void MirrorAudioProcessorEditor::drawVoiceGlyph(juce::Graphics& g, int voiceInde
         const float scale = 1.0f + energy * (0.33f + 0.18f * (float) ring);
         auto ringBounds = juce::Rectangle<float>(x - 23.0f * scale, groundY - 5.0f * scale,
                                                   46.0f * scale, 10.0f * scale);
-        g.setColour(kPurple.withAlpha(glow * (0.20f - ring * 0.06f)));
+        g.setColour(kPurple.withAlpha(glow * (0.20f - (float) ring * 0.06f)));
         g.drawEllipse(ringBounds, 1.1f);
     }
 
@@ -1027,8 +1030,9 @@ void MirrorAudioProcessorEditor::drawVoiceGlyph(juce::Graphics& g, int voiceInde
         for (int outline = 1; outline <= 2; ++outline)
         {
             g.setColour(kPurple.withAlpha(alpha * 0.16f / (float) outline));
-            g.drawEllipse(x - 12.0f - outline * 4.0f, top + 7.0f - outline * 2.0f,
-                          24.0f + outline * 8.0f, height * 0.76f + outline * 4.0f, 0.8f);
+            const float outlineScale = (float) outline;
+            g.drawEllipse(x - 12.0f - outlineScale * 4.0f, top + 7.0f - outlineScale * 2.0f,
+                          24.0f + outlineScale * 8.0f, height * 0.76f + outlineScale * 4.0f, 0.8f);
         }
     }
 

@@ -38,7 +38,7 @@ public:
     }
 
 private:
-    float step(float& val, float& target, int& counter, float amount, float range)
+    float step(float& val, float& target, int& counter, float /*amount*/, float range)
     {
         if (--counter <= 0)
         {
