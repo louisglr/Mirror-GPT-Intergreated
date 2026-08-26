@@ -420,8 +420,8 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
         resized();
         repaint();
     };
-    rootBox.onChange = [syncReferenceCombo] { syncReferenceCombo(rootBox, "C"); };
-    scaleBox.onChange = [syncReferenceCombo] { syncReferenceCombo(scaleBox, "Major"); };
+    rootBox.onChange = [this, syncReferenceCombo] { syncReferenceCombo(rootBox, "C"); };
+    scaleBox.onChange = [this, syncReferenceCombo] { syncReferenceCombo(scaleBox, "Major"); };
     presetBox.onChange = [this, syncReferenceCombo]
     {
         syncReferenceCombo(presetBox, juce::String());
@@ -935,7 +935,7 @@ void MirrorAudioProcessorEditor::timerCallback()
     const auto syncReferenceCombo = [](juce::ComboBox& box, const juce::String& referenceText)
     {
         const float targetAlpha = box.getText() == referenceText ? 0.0f : 1.0f;
-        if (box.getAlpha() != targetAlpha)
+        if (std::abs(box.getAlpha() - targetAlpha) > 0.001f)
             box.setAlpha(targetAlpha);
     };
     syncReferenceCombo(modeBox, "Manual");
