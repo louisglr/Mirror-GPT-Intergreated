@@ -5,6 +5,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 
+// The editor is drawn entirely from JUCE components and vector paths.  The
+// reference art is a visual brief only; it is not composited into the plug-in.
 class MirrorAudioProcessorEditor : public juce::AudioProcessorEditor,
                                    private juce::Timer
 {
@@ -39,26 +41,28 @@ private:
     };
 
     void timerCallback() override;
-    void setupKnob(KnobWithLabel& knob, const juce::String& parameterID, const juce::String& displayName);
-    void setupVoiceColumn(VoiceColumn& column, int voiceIndex);
-    void configureLabel(juce::Label& label, const juce::String& text, float fontSize, bool centred = true);
-    void configureComboBox(juce::ComboBox& box, const juce::String& tooltip);
+    void setupKnob(KnobWithLabel&, const juce::String& parameterID, const juce::String& caption);
+    void setupVoiceColumn(VoiceColumn&, int voiceIndex);
+    void configureLabel(juce::Label&, const juce::String& text, float fontSize, bool centred = true);
+    void configureComboBox(juce::ComboBox&, const juce::String& tooltip);
     void applyPreset(int presetIndex);
     void showPage(int pageIndex);
     void updateControlVisibility();
-    void layoutMain(juce::Rectangle<int> body);
-    void layoutHarmony(juce::Rectangle<int> body);
-    void placeKnob(KnobWithLabel& knob, juce::Rectangle<int> bounds);
-    void placeSmallKnob(juce::Slider& slider, juce::Label& label, juce::Rectangle<int> bounds);
+
+    void layoutHeader();
+    void layoutMain();
+    void layoutHarmony();
+    void placeKnob(KnobWithLabel&, juce::Rectangle<int> bounds);
+    void placeSmallKnob(juce::Slider&, juce::Label&, juce::Rectangle<int> bounds);
 
     void drawBackground(juce::Graphics&) const;
     void drawHeader(juce::Graphics&) const;
+    void drawPanel(juce::Graphics&, juce::Rectangle<float> bounds, bool enabled, bool ornate = true) const;
+    void drawSectionTitle(juce::Graphics&, const juce::String&, juce::Rectangle<int> bounds) const;
+    void drawMirrorVisualizer(juce::Graphics&) const;
+    void drawVoiceGlyph(juce::Graphics&, int voiceIndex, float x, float groundY, float energy, float alpha) const;
     void drawMainPanels(juce::Graphics&) const;
     void drawHarmonyPanels(juce::Graphics&) const;
-    void drawMirrorVisualizer(juce::Graphics&) const;
-    void drawMirrorPanel(juce::Graphics&, juce::Rectangle<float> bounds, bool enabled, bool ornate = true) const;
-    void drawSectionTitle(juce::Graphics&, const juce::String& text, juce::Rectangle<int> bounds) const;
-    void drawVoiceGlyph(juce::Graphics&, int voiceIndex, float x, float groundY, float energy, float alpha) const;
 
     MirrorAudioProcessor& audioProcessor;
     std::unique_ptr<juce::LookAndFeel_V4> mirrorLookAndFeel;
@@ -69,16 +73,15 @@ private:
     bool showAdvanced = false;
     int lastMode = -1;
 
-    juce::ComboBox modeBox;
+    juce::ComboBox modeBox, rootBox, scaleBox, presetBox;
     juce::ComboBox vocalRangeBox, harmonyStyleBox, midiVoicingBox, midiInversionBox;
-    juce::Label modeLabel, vocalRangeLabel, harmonyStyleLabel, midiVoicingLabel, midiInversionLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment, vocalRangeAttachment, harmonyStyleAttachment, midiVoicingAttachment, midiInversionAttachment;
+    juce::Label modeLabel, rootLabel, scaleLabel, presetLabel;
+    juce::Label vocalRangeLabel, harmonyStyleLabel, midiVoicingLabel, midiInversionLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment, rootAttachment, scaleAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> vocalRangeAttachment, harmonyStyleAttachment, midiVoicingAttachment, midiInversionAttachment;
 
-    juce::ComboBox rootBox, scaleBox, presetBox;
-    juce::Label rootLabel, scaleLabel, presetLabel, inputSectionLabel;
     KnobWithLabel trackingKnob, glideKnob;
     juce::ToggleButton freezeButton;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rootAttachment, scaleAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> freezeAttachment;
 
     KnobWithLabel dryLevelKnob, dryPanKnob, dryFormantKnob, dryPitchKnob, dryWidthKnob;
@@ -87,7 +90,6 @@ private:
     KnobWithLabel ambienceKnob, harmonyMixKnob, globalSaturationKnob, outputGainKnob;
 
     std::array<juce::Rectangle<int>, kNumHarmonyVoices> voicePanelBounds;
-    std::array<juce::Rectangle<int>, kNumHarmonyVoices> voiceLevelBounds;
     juce::Rectangle<int> dryPanelBounds, characterPanelBounds, outputPanelBounds, mirrorBounds;
 
     std::array<float, kNumHarmonyVoices> visualPan {};
