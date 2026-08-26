@@ -74,7 +74,7 @@ namespace
             const float angle = juce::jmap(position, startAngle, endAngle);
             const auto dot = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * (radius * 0.60f);
             g.setColour(kPurple.withAlpha(0.92f));
-            g.drawLine(centre, dot, 2.4f);
+            g.drawLine(centre.x, centre.y, dot.x, dot.y, 2.4f);
             g.setColour(kText.withAlpha(0.85f));
             g.fillEllipse(juce::Rectangle<float>(dot.x - 1.8f, dot.y - 1.8f, 3.6f, 3.6f));
         }
@@ -903,7 +903,9 @@ void MirrorAudioProcessorEditor::drawVoiceGlyph(juce::Graphics& g, int voiceInde
         glyph.lineTo(x - 5.0f, bodyTop - 2.0f);
         glyph.closeSubPath();
         g.setColour(kGold.withAlpha(alpha * 0.75f));
-        g.drawArc(x - 9.0f, top - 5.0f, 18.0f, 18.0f, 0.2f, 2.45f, 1.0f);
+        juce::Path crescent;
+        crescent.addArc(x - 9.0f, top - 5.0f, 18.0f, 18.0f, 0.2f, 2.45f, true);
+        g.strokePath(crescent, juce::PathStrokeType(1.0f));
     }
     else
     {
