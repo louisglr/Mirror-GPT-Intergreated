@@ -202,6 +202,8 @@ private:
     std::array<FormantTilt, kNumHarmonyVoices> harmonyFormant;
     std::array<VoiceFilter, kNumHarmonyVoices> harmonyFilters;
     std::array<WarmSaturator, kNumHarmonyVoices> harmonySaturators;
+    // A low-drive shared bus for cohesion before dry/wet summing.
+    WarmSaturator harmonyGlueL, harmonyGlueR;
     WarmSaturator globalSaturatorL, globalSaturatorR;
     StereoSafetyLimiter outputLimiter;
     std::array<HumanizeWalker, kNumHarmonyVoices> harmonyHumanize;

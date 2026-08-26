@@ -57,8 +57,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
         juce::ParameterID{ "harmonyStyle", 1 }, "Harmony Style",
         juce::StringArray{ "Tight", "Natural", "Wide", "Choir" }, 1));
 
-    add01("tracking", "Tracking", 0.5f);
-    add01("glide", "Glide", 0.3f);
+    // These three core performance stages are intentionally full-scale in MIRROR.
+    // Per-voice level and the dry control still determine the musical balance.
+    add01("tracking", "Tracking", 1.0f);
+    add01("glide", "Glide", 1.0f);
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{ "freeze", 1 }, "Freeze", false));
 
@@ -159,7 +161,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
     add01("ambience", "Ambience", 0.2f);
 
     // --- MIX ---
-    add01("harmony", "Harmony", 0.5f);
+    add01("harmony", "Harmony", 1.0f);
     add01("globalSaturation", "Global Saturation", 0.0f);
     // Dedicated final trim. It is neutral at 0 dB and runs after colour,
     // before the safety limiter, so it cannot change the proven default tone.
@@ -203,6 +205,8 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
         voiceLastMidi[(size_t) i] = 69.0f + (float) i * 3.0f;
     }
 
+    harmonyGlueL.prepare(sampleRate);
+    harmonyGlueR.prepare(sampleRate);
     globalSaturatorL.prepare(sampleRate);
     globalSaturatorR.prepare(sampleRate);
     outputLimiter.prepare(sampleRate);
@@ -406,8 +410,11 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     int vocalRange = (int) *apvts.getRawParameterValue("vocalRange");
     int harmonyStyle = (int) *apvts.getRawParameterValue("harmonyStyle");
     pitchDetector.setVocalRange(vocalRange);
-    float tracking = *apvts.getRawParameterValue("tracking");
-    float glide = *apvts.getRawParameterValue("glide");
+    // Locked performance defaults: the engine always tracks and transitions
+    // at its highest-quality setting.  The remaining musical balance lives
+    // in the dry and per-voice controls.
+    constexpr float tracking = 1.0f;
+    constexpr float glide = 1.0f;
     bool freeze = *apvts.getRawParameterValue("freeze") > 0.5f;
     int mode = (int) *apvts.getRawParameterValue("mode");
     float midiVelocitySensitivity = *apvts.getRawParameterValue("midiVelocity");
@@ -426,7 +433,9 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     static constexpr float styleSpread[] = { 0.55f, 1.0f, 1.25f, 1.45f };
     static constexpr float styleAmbience[] = { 0.35f, 1.0f, 1.15f, 1.55f };
     const int styleIndex = juce::jlimit(0, 3, harmonyStyle);
-    humanizeAmt = juce::jlimit(0.0f, 1.0f, humanizeAmt * styleHumanize[styleIndex]);
+    // Keep voice-local drift musical without allowing four independent
+    // walkers to pull the stack apart.
+    humanizeAmt = juce::jlimit(0.0f, 1.0f, humanizeAmt * styleHumanize[styleIndex] * 0.70f);
     spread *= styleSpread[styleIndex];
     ambienceAmt = juce::jlimit(0.0f, 1.0f, ambienceAmt * styleAmbience[styleIndex]);
 
@@ -436,7 +445,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     const float dryPitchRatio = std::exp2(dryPitchSemis / 12.0f);
 
     dryLevelSmoothed.setTargetValue(*apvts.getRawParameterValue("dry"));
-    harmonyLevelSmoothed.setTargetValue(*apvts.getRawParameterValue("harmony"));
+    harmonyLevelSmoothed.setTargetValue(1.0f);
     dryWidthSmoothed.setTargetValue(*apvts.getRawParameterValue("dryWidth"));
     outputGainSmoothed.setTargetValue(*apvts.getRawParameterValue("outputGain"));
 
@@ -478,6 +487,11 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     std::array<float, kNumHarmonyVoices> fineTuneRatios {};
     std::array<float, kNumHarmonyVoices> chromaticRatios {};
     std::array<float, kNumHarmonyVoices> manualScaleFrequencies {};
+    int activeHarmonyVoiceCount = 0;
+    for (int i = 0; i < kNumHarmonyVoices; ++i)
+        if (vp[(size_t) i].enable && (!anySolo || vp[(size_t) i].solo))
+            ++activeHarmonyVoiceCount;
+
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
         const auto& interval = kMusicalIntervals[(size_t) vp[(size_t) i].intervalIdx];
@@ -706,10 +720,32 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             harmonySumR += raw * level * std::sin(panPos);
         }
 
+        // Group the voices before ambience: modest level normalisation, a
+        // controlled mid/side fold, and a shared warm bus make four separate
+        // generators feel like one coherent vocal layer rather than four
+        // competing takes.
+        const int extraVoices = juce::jmax(0, activeHarmonyVoiceCount - 1);
+        const float stackNormaliser = 1.0f / (1.0f + 0.16f * (float) extraVoices);
+        harmonySumL *= stackNormaliser;
+        harmonySumR *= stackNormaliser;
+
+        const float stackMid = 0.5f * (harmonySumL + harmonySumR);
+        const float stackSide = 0.5f * (harmonySumL - harmonySumR);
+        const float sideRetain = activeHarmonyVoiceCount > 1 ? 0.82f : 1.0f;
+        harmonySumL = stackMid + stackSide * sideRetain;
+        harmonySumR = stackMid - stackSide * sideRetain;
+
+        const float glueAmount = 0.025f + 0.0175f * (float) extraVoices;
+        harmonySumL = harmonyGlueL.process(harmonySumL, glueAmount);
+        harmonySumR = harmonyGlueR.process(harmonySumR, glueAmount);
+
         if (ambienceAmt > 0.001f)
         {
-            float diffL = ambienceApL2.process(ambienceApL1.process(harmonySumL));
-            float diffR = ambienceApR2.process(ambienceApR1.process(harmonySumR));
+            // The diffuser is fed a shared signal.  It gives the voices a
+            // common room instead of adding a different haze to each side.
+            const float sharedStack = 0.5f * (harmonySumL + harmonySumR);
+            const float diffL = ambienceApL2.process(ambienceApL1.process(sharedStack));
+            const float diffR = ambienceApR2.process(ambienceApR1.process(sharedStack));
             harmonySumL = harmonySumL * (1.0f - ambienceAmt * 0.5f) + diffL * ambienceAmt * 0.5f;
             harmonySumR = harmonySumR * (1.0f - ambienceAmt * 0.5f) + diffR * ambienceAmt * 0.5f;
         }

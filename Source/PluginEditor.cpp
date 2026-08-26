@@ -377,6 +377,17 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& mir
     setupKnob(globalSaturationKnob, "globalSaturation", "Glue");
     setupKnob(outputGainKnob, "outputGain", "Gain");
 
+    // These performance stages are deliberately fixed at their full-quality
+    // setting.  The controls stay visible as part of the instrument face,
+    // but their pointers cannot drift away from 100%.
+    for (auto* fixed : { &trackingKnob, &glideKnob, &harmonyMixKnob })
+    {
+        fixed->attachment.reset();
+        fixed->slider.setValue(fixed->slider.getMaximum(), juce::dontSendNotification);
+        fixed->slider.setInterceptsMouseClicks(false, false);
+        fixed->slider.setTooltip("Fixed at 100%");
+    }
+
     mainPageButton.setToggleState(true, juce::dontSendNotification);
     setSize(1120, 650);
     updateControlVisibility();
@@ -521,11 +532,10 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
         set("voiceVibratoRate" + idx, vibratoRate);
     };
 
-    // A preset is self-contained: it resets musical context as well as
-    // visible controls, so it recalls the same sound in every session.
+    // A preset changes the vocal texture, but deliberately preserves the
+    // user-selected Key and Scale so it remains musical in the current song.
     setChoice("mode", 0, 2);
-    setChoice("rootNote", 0, 12);
-    setChoice("scaleType", 1, 3);
+    set("harmony", 1.0f); set("tracking", 1.0f); set("glide", 1.0f);
     set("freeze", 0.0f);
     set("dryPan", 0.0f); set("dryFormant", 0.0f); set("dryPitch", 0.0f); set("dryWidth", 0.5f);
     set("midiVelocity", 0.0f); set("globalSaturation", 0.04f); set("outputGain", 0.0f);
@@ -539,7 +549,7 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
         case 1:
             setChoice("harmonyStyle", 0, 4);
             set("humanize", 0.10f); set("character", 0.0f); set("spread", 0.5f); set("ambience", 0.16f);
-            set("dry", 0.18f); set("harmony", 0.78f); set("tracking", 0.72f); set("glide", 0.48f);
+            set("dry", 0.18f); set("harmony", 1.0f); set("tracking", 1.0f); set("glide", 1.0f);
             voice(0, true, 0, 0.70f, -0.22f); voice(1, true, 3, 0.56f, 0.22f); voice(2, true, 7, 0.42f, -0.45f); voice(3, true, 13, 0.30f, 0.45f);
             advanced(0, -0.08f, -4.0f, 0.14f, 0.02f, 0.0f, 0.00f, 0.42f);
             advanced(1, -0.14f, 5.0f, 0.20f, 0.03f, 1.5f, 0.02f, 0.47f);
@@ -549,7 +559,7 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
         case 2:
             setChoice("harmonyStyle", 2, 4);
             set("humanize", 0.32f); set("character", 0.08f); set("spread", 0.86f); set("ambience", 0.25f);
-            set("dry", 0.32f); set("harmony", 0.72f); set("tracking", 0.64f); set("glide", 0.44f);
+            set("dry", 0.32f); set("harmony", 1.0f); set("tracking", 1.0f); set("glide", 1.0f);
             voice(0, true, 3, 0.64f, -0.62f); voice(1, true, 7, 0.58f, 0.58f); voice(2, true, 14, 0.38f, -0.18f); voice(3, true, 4, 0.28f, 0.30f);
             advanced(0, -0.12f, -5.0f, 0.16f, 0.03f, 0.0f, 0.03f, 0.38f);
             advanced(1, -0.18f, 6.0f, 0.24f, 0.04f, 2.0f, 0.02f, 0.46f);
@@ -559,7 +569,7 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
         case 3:
             setChoice("harmonyStyle", 3, 4);
             set("humanize", 0.24f); set("character", 0.10f); set("spread", 0.95f); set("ambience", 0.30f);
-            set("dry", 0.42f); set("harmony", 0.76f); set("tracking", 0.58f); set("glide", 0.38f);
+            set("dry", 0.42f); set("harmony", 1.0f); set("tracking", 1.0f); set("glide", 1.0f);
             voice(0, true, 3, 0.68f, -0.72f); voice(1, true, 7, 0.64f, 0.72f); voice(2, true, 13, 0.42f, -0.25f); voice(3, true, 14, 0.34f, 0.28f);
             advanced(0, -0.04f, -3.0f, 0.10f, 0.04f, 0.0f, 0.04f, 0.43f);
             advanced(1, -0.14f, 4.0f, 0.18f, 0.05f, 2.5f, 0.04f, 0.49f);
@@ -995,13 +1005,6 @@ void MirrorAudioProcessorEditor::drawHarmonyPanels(juce::Graphics& g) const
         const auto& voice = voiceColumns[(size_t) i];
         const bool enabled = voice.enableButton.getToggleState();
         drawPanel(g, voicePanelBounds[(size_t) i].toFloat(), enabled);
-        if (!showAdvanced)
-        {
-            g.setColour(kPurple.withAlpha(0.15f));
-            g.fillEllipse((float) voicePanelBounds[(size_t) i].getCentreX() - 64.0f,
-                          (float) voicePanelBounds[(size_t) i].getY() + 205.0f, 128.0f, 128.0f);
-        }
-
         g.setColour(kGoldDim.withAlpha(0.55f));
         const float dividerX = (float) voicePanelBounds[(size_t) i].getX() + 58.0f;
         g.drawLine(dividerX, (float) voicePanelBounds[(size_t) i].getY() + 38.0f,
