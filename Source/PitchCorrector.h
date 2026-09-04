@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 #include <juce_core/juce_core.h>
 
 // Scale-aware correction with time-based transitions.  Scale quantisation is
@@ -22,6 +23,7 @@ public:
         lastDetectedFreq = -1.0f;
         lastRootNote = -1;
         lastScaleType = -1;
+        lastQuantisedMidi = std::numeric_limits<int>::min();
         smoothingCoeff = 0.01f;
         neutralReleaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.090));
     }
@@ -36,7 +38,8 @@ public:
             lastTracking = tracking;
         }
 
-        if (detectedFreq <= 0.0f || confidence < 0.35f)
+        if (!std::isfinite(detectedFreq) || !std::isfinite(confidence)
+            || detectedFreq <= 0.0f || confidence < 0.35f)
         {
             smoothedRatio += (1.0f - smoothedRatio) * neutralReleaseCoeff;
             return smoothedRatio;
@@ -45,7 +48,11 @@ public:
         if (std::abs(detectedFreq - lastDetectedFreq) > 1.0e-5f
             || rootNote != lastRootNote || scaleType != lastScaleType)
         {
-            targetRatio = nearestScaleFreq(detectedFreq, rootNote, scaleType) / detectedFreq;
+            // A small note-boundary hysteresis prevents an otherwise stable
+            // vocal from toggling between adjacent scale tones around a
+            // quantisation midpoint. Large melodic moves still retarget
+            // immediately.
+            targetRatio = nearestScaleFreqWithHysteresis(detectedFreq, rootNote, scaleType) / detectedFreq;
             lastDetectedFreq = detectedFreq;
             lastRootNote = rootNote;
             lastScaleType = scaleType;
@@ -90,11 +97,45 @@ public:
         return 440.0f * std::exp2((float) (midiNote - 69) / 12.0f);
     }
 
+    // Manual scale harmonies use this same hysteretic note state as the lead
+    // correction path.  Exposing it avoids a lead that is stable on one scale
+    // degree while its harmony stack flips to the adjacent degree.
+    int getLastQuantisedMidi() const { return lastQuantisedMidi; }
+
 private:
-    static float nearestScaleFreq(float freq, int rootNote, int scaleType)
+    float nearestScaleFreqWithHysteresis(float freq, int rootNote, int scaleType)
     {
-        const int nearestMidi = quantizeToScale(69.0f + 12.0f * std::log2(freq / 440.0f), rootNote, scaleType);
-        return midiToFreq(nearestMidi);
+        const float midiFloat = 69.0f + 12.0f * std::log2(freq / 440.0f);
+        const int candidate = quantizeToScale(midiFloat, rootNote, scaleType);
+
+        if (lastQuantisedMidi == std::numeric_limits<int>::min()
+            || rootNote != lastRootNote || scaleType != lastScaleType)
+        {
+            lastQuantisedMidi = candidate;
+            return midiToFreq(lastQuantisedMidi);
+        }
+
+        if (candidate != lastQuantisedMidi)
+        {
+            const int distance = std::abs(candidate - lastQuantisedMidi);
+            if (distance > 3)
+            {
+                lastQuantisedMidi = candidate;
+            }
+            else
+            {
+                const float midpoint = 0.5f * (float) (candidate + lastQuantisedMidi);
+                constexpr float hysteresisSemitones = 0.18f;
+                const bool movedUp = candidate > lastQuantisedMidi;
+                const bool crossedBoundary = movedUp
+                    ? midiFloat >= midpoint + hysteresisSemitones
+                    : midiFloat <= midpoint - hysteresisSemitones;
+                if (crossedBoundary)
+                    lastQuantisedMidi = candidate;
+            }
+        }
+
+        return midiToFreq(lastQuantisedMidi);
     }
 
     static int quantizeToScale(float midiFloat, int root, int scaleType)
@@ -122,5 +163,6 @@ private:
     double sampleRate = 44100.0;
     float lastTracking = -1.0f, lastDetectedFreq = -1.0f;
     int lastRootNote = -1, lastScaleType = -1;
+    int lastQuantisedMidi = std::numeric_limits<int>::min();
     float smoothingCoeff = 0.01f, neutralReleaseCoeff = 0.001f;
 };
