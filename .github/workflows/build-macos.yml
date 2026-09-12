@@ -68,7 +68,9 @@ jobs:
           done < <(find dist -type d -name '*.component' -print0)
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           sleep 3
-          auval -v aufx MIRR LGRL
+          # MIRROR accepts MIDI while processing audio, so JUCE correctly
+          # registers it as an Audio Unit Music Effect (aumf), not aufx.
+          auval -v aumf MIRR LGRL
 
       - name: Write SHA-256 manifest
         shell: bash

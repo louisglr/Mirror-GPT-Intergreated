@@ -21,7 +21,9 @@ is not the final signed commercial installer.
   cutoff, removing small timbre steps during glides and vibrato.
 - Saturation now uses first-order antiderivative anti-aliasing (ADAA),
   zero-centred asymmetry and DC removal for smoother colour without adding a
-  hidden latency stage.
+  hidden latency stage. Its exact curve is precomputed outside the audio
+  callback and evaluated with continuous Hermite interpolation, avoiding a
+  sustained bank of expensive transcendental operations.
 - Transport restarts, seeks and loop jumps clear old pitch, grain, delay and
   filter history before rendering the new position.
 - Dry Pitch preserves the input stereo side around the shifted centre instead
@@ -33,6 +35,12 @@ is not the final signed commercial installer.
   low-note analysis could create a roughly 177,000-operation burst every
   10 ms; the new path performs at most 640 small analysis units per input
   sample and allocates nothing in the callback.
+- Pitch-mark renewal is staggered across the dry reader and four harmony
+  readers, flattening the periodic CPU crest that could become audible in a
+  long, low-buffer session. Silent voices and exact-unison readers sleep until
+  they are needed, then re-prime behind a short fade.
+- Pitch detection now retains the same low-frequency/DC behaviour from 22.05
+  through 192 kHz instead of thinning the detector input at high sample rates.
 - The locked 100% Tracking mapping was reversed in the old implementation. It
   now selects the intended fast 7 ms correction response.
 - Manual voice transitions use a responsive 38 ms target instead of the old

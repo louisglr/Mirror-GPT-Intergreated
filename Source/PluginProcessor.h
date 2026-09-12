@@ -29,7 +29,8 @@ class MicroDelayLine
 public:
     void prepare(double sampleRateIn)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         int size = (int) (sampleRate * 0.06) + 8;
         buf.assign((size_t) size, 0.0f);
         writePos = 0;
@@ -43,13 +44,17 @@ public:
 
     float process(float x, float delayMs)
     {
+        if (buf.empty())
+            return std::isfinite(x) ? x : 0.0f;
         if (!std::isfinite(x))
             x = 0.0f;
 
         int size = (int) buf.size();
         buf[(size_t) writePos] = x;
 
-        float delaySamples = delayMs * 0.001f * (float) sampleRate;
+        const float safeDelayMs = std::isfinite(delayMs)
+            ? juce::jlimit(0.0f, 55.0f, delayMs) : 0.0f;
+        float delaySamples = safeDelayMs * 0.001f * (float) sampleRate;
         float readPos = (float) writePos - delaySamples;
         while (readPos < 0.0f) readPos += (float) size;
 
@@ -93,6 +98,8 @@ public:
 
     float process(float in)
     {
+        if (buf.empty())
+            return std::isfinite(in) ? in : 0.0f;
         if (!std::isfinite(in))
             in = 0.0f;
 
@@ -139,6 +146,8 @@ public:
 
     float process(float input)
     {
+        if (buffer.empty())
+            return std::isfinite(input) ? input : 0.0f;
         if (!std::isfinite(input))
             input = 0.0f;
         buffer[(size_t) writePosition] = input;
@@ -164,6 +173,8 @@ class StereoSafetyLimiter
 public:
     void prepare(double sampleRate)
     {
+        if (!std::isfinite(sampleRate) || sampleRate <= 1.0)
+            sampleRate = 44100.0;
         gain = 1.0f;
         releaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.085));
     }
@@ -203,7 +214,9 @@ public:
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    void reset() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -291,6 +304,10 @@ private:
 
     PhaseLockedPsolaGrainVoice dryVoice;
     SampleAlignmentDelay dryAlignmentL, dryAlignmentR;
+    // Host bypass must retain the declared granular latency. Both lines are
+    // clocked during normal and bypassed processing, so toggling bypass never
+    // time-shifts the vocal or reveals a cold delay buffer.
+    SampleAlignmentDelay bypassAlignmentL, bypassAlignmentR;
     // Formant filtering needs independent state per channel; sharing one
     // filter state made an active dry formant control collapse stereo to mono.
     FormantTilt dryFormantProcL, dryFormantProcR;
@@ -308,6 +325,7 @@ private:
     std::array<float, kNumHarmonyVoices> voiceRatioSmoothed;
     std::array<float, kNumHarmonyVoices> voiceVibratoPhase;
     std::array<float, kNumHarmonyVoices> voiceLastMidi;
+    std::array<bool, kNumHarmonyVoices> voiceDspWasRunning {};
     int lastStableBaseMidi = 69;
     std::uint32_t lastHandledPitchRevision = 0;
 
@@ -361,6 +379,7 @@ private:
     void handleQueuedMidiEvent(const QueuedMidiEvent&);
 
     void resetProcessingState(bool clearMidiState);
+    void processAudioBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&, bool hostBypassed);
     bool detectTransportDiscontinuity(int blockSize);
     bool hasHostTransportPosition = false;
     bool hasHostPpqPosition = false;
@@ -384,13 +403,16 @@ private:
     int reportedLatencySamples = 0;
 
     juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed, outputGainSmoothed;
-    // Both dry paths always run; this blend crossfades between the stereo
-    // aligned lead and the granular pitch-shifted lead without replaying a
-    // frozen delay buffer when Dry Pitch crosses zero.
+    juce::SmoothedValue<float> dryPanGainLSmoothed, dryPanGainRSmoothed;
+    juce::SmoothedValue<float> dryPitchSemitonesSmoothed, midiVelocitySmoothed;
+    // This blend crossfades between the stereo aligned lead and the granular
+    // pitch-shifted lead. The PSOLA reader sleeps at stable zero pitch and
+    // automatically primes before this 25 ms blend becomes audible.
     juce::SmoothedValue<float> dryPitchBlendSmoothed;
+    juce::SmoothedValue<float> hostBypassMixSmoothed;
     juce::SmoothedValue<float> dryFormantSmoothed, ambienceSmoothed, globalSaturationSmoothed;
     std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceLevelSmoothed, voicePanSmoothed, voiceSaturationSmoothed, voiceMicroDelaySmoothed;
-    std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceFormantSmoothed;
+    std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceFormantSmoothed, voiceVibratoSmoothed, voiceVibratoRateSmoothed;
 
     double currentSampleRate = 44100.0;
     float inputEnvelopeAttackCoeff = 0.08f;

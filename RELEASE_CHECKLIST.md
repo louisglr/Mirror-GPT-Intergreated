@@ -9,6 +9,7 @@ can safely install, buy and receive support for.
 - [ ] DSP smoke tests and `auval` pass from a clean CI runner.
 - [ ] Manual matrix in `TESTING.md` passes on Apple Silicon and Intel.
 - [ ] Logic Pro and one VST3 host pass scan, load, save/restore and automation.
+- [ ] Host bypass preserves PDC alignment and returns click-free on transients.
 - [ ] CPU usage is measured at 44.1/48/96 kHz and 32/64/128/256 samples.
 - [ ] A 30–60 minute loop and offline bounce complete without crackle or drift.
 - [ ] Parameter IDs and manufacturer/plugin codes are frozen before 1.0.

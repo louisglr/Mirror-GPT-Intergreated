@@ -8,8 +8,9 @@ at 44.1 and 96 kHz.
 
 - Configure and build Release for arm64 and x86_64.
 - Run `ctest --test-dir build -C Release --output-on-failure`.
-- Confirm the `MirrorDspSmoke` test passes at 44.1, 48 and 96 kHz.
-- Validate the Audio Unit with `auval -v aufx MIRR LGRL`.
+- Confirm the `MirrorDspSmoke` test passes across 22.05, 24, 29.4, 44.1, 48,
+  96 and 192 kHz, including the saturation reference and invalid-state tests.
+- Validate the MIDI-controlled Audio Unit with `auval -v aumf MIRR LGRL`.
 - Open AU and VST3 once and confirm the 700 × 520 editor renders.
 
 ## 2. Five-minute functional check
@@ -18,11 +19,14 @@ at 44.1 and 96 kHz.
    default Manual stack must arrive as one coherent sound.
 2. Change Dry Pitch 0 → +1 → 0. The lead must remain stereo, return without an
    old fragment and produce no click at zero.
-3. Enable only Voice 1 and 2. Solo a disabled Voice 3; Voice 1 and 2 must keep
+3. Toggle the host's plug-in Bypass repeatedly on a sharp transient. Timing
+   must remain sample-aligned with the declared latency, with no old delay
+   fragment or hard edge when the effect returns.
+4. Enable only Voice 1 and 2. Solo a disabled Voice 3; Voice 1 and 2 must keep
    playing. Solo an enabled voice; only that voice should remain.
-4. Open Harmony → Advanced. Fine, Tone, Sat, Delay, Vibrato and Vib Rate must
+5. Open Harmony → Advanced. Fine, Tone, Sat, Delay, Vibrato and Vib Rate must
    appear for all four voices and remain editable.
-5. Select a preset, then change an audible parameter. The preset field must
+6. Select a preset, then change an audible parameter. The preset field must
    read SELECT / CUSTOM. Re-select the preset and confirm its Advanced values
    restore. Key and Scale must not change.
 
@@ -72,6 +76,8 @@ at 44.1 and 96 kHz.
   restore; the non-state-backed preset selector should honestly show Custom.
 - Automate Enable, Solo, Dry Pitch, Formant, Tone, Sat, Delay and Output Gain.
   No stale audio, NaN propagation or abrupt uncontrolled edge is acceptable.
+- Sweep Dry Pan, Dry Pitch, MIDI Velocity, Vibrato and Vib Rate while audio is
+  running. Their smoothing must prevent block-edge clicks and zipper steps.
 
 ## 6. Long-session and performance matrix
 

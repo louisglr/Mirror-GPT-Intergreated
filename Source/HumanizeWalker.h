@@ -12,7 +12,8 @@ class HumanizeWalker
 public:
     void prepare(double sampleRateIn, int seed)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         random = juce::Random(seed);
         pitchVal = 0.0f; pitchTarget = 0.0f; pitchCounter = 0;
         ampVal = 0.0f; ampTarget = 0.0f; ampCounter = 0;
@@ -66,8 +67,8 @@ private:
 
     juce::Random random;
     double sampleRate = 44100.0;
-    float pitchVal, pitchTarget; int pitchCounter;
-    float ampVal, ampTarget; int ampCounter;
+    float pitchVal = 0.0f, pitchTarget = 0.0f; int pitchCounter = 0;
+    float ampVal = 0.0f, ampTarget = 0.0f; int ampCounter = 0;
     float lastAmount = -1.0f;
     float smoothing = 0.0f;
 };

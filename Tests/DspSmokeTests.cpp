@@ -6,6 +6,8 @@
 
 #include "PitchDetector.h"
 #include "PhaseLockedPsolaGrainVoice.h"
+#include "PitchCorrector.h"
+#include "VoiceFilter.h"
 #include "WarmSaturator.h"
 
 namespace
@@ -43,12 +45,13 @@ double estimateFrequency(const std::vector<float>& signal, double sampleRate,
         / (risingCrossings.back() - risingCrossings.front());
 }
 
-double renderPitchShift(double sampleRate, float sourceHz, float ratio)
+double renderPitchShift(double sampleRate, float sourceHz, float ratio,
+                        float renewalStagger = 0.0f)
 {
     VoiceBuffer buffer;
     PhaseLockedPsolaGrainVoice voice;
     buffer.prepare(sampleRate, 1.0f);
-    voice.prepare(sampleRate);
+    voice.prepare(sampleRate, renewalStagger);
 
     const int sampleCount = (int) std::lround(sampleRate * 1.5);
     std::vector<float> output((size_t) sampleCount, 0.0f);
@@ -102,7 +105,7 @@ void testPitchShifter()
     const double unison = renderPitchShift(sampleRate, 200.0f, 1.0f);
     const double fine = renderPitchShift(sampleRate, 200.0f,
         std::exp2(1.0f / 1200.0f));
-    const double fifth = renderPitchShift(sampleRate, 200.0f, 1.5f);
+    const double fifth = renderPitchShift(sampleRate, 200.0f, 1.5f, 0.4f);
 
     expect(std::abs(unison - 200.0) < 0.8, "transparent unison is off pitch");
     expect(std::abs(fine - 200.1156) < 0.8, "one-cent fine tune did not enter pitch path");
@@ -129,6 +132,56 @@ void testSaturatorAndReset()
     expect(std::isfinite(saturator.process(0.1f, 0.5f)),
            "ADAA saturator failed to recover after reset");
 
+    // The real-time path uses a precomputed Hermite antiderivative instead of
+    // transcendental functions. Compare it with the exact ADAA equation so a
+    // future CPU optimisation cannot silently change the saturation colour.
+    saturator.prepare(48000.0);
+    constexpr float amount = 0.73f;
+    const float drive = 1.0f + 2.4f * amount;
+    const float bias = 0.070f * amount;
+    const float biasValue = std::tanh(drive * bias);
+    const float normaliser = juce::jmax(0.1f, std::tanh(drive));
+    const float compensation = 1.0f / (1.0f + 0.10f * amount);
+    const float dcCoefficient = 1.0f - std::exp(
+        -juce::MathConstants<float>::twoPi * 18.0f / 48000.0f);
+    float dcState = 0.0f, shapedDcState = 0.0f, previousAc = 0.0f;
+    float maximumCurveError = 0.0f;
+    const auto exactLogCosh = [] (float x)
+    {
+        const float magnitude = std::abs(x);
+        return magnitude + std::log1p(std::exp(-2.0f * magnitude))
+            - 0.6931471805599453f;
+    };
+    const auto exactShape = [=] (float x)
+    {
+        return (std::tanh((x + bias) * drive) - biasValue) / normaliser;
+    };
+    const auto exactAntiDerivative = [=] (float x)
+    {
+        return (exactLogCosh((x + bias) * drive) / drive - x * biasValue)
+            / normaliser;
+    };
+    for (int i = 0; i < 48000; ++i)
+    {
+        const float input = 0.72f * std::sin(juce::MathConstants<float>::twoPi
+            * 997.0f * (float) i / 48000.0f);
+        dcState += dcCoefficient * (input - dcState);
+        const float ac = input - dcState;
+        const float delta = ac - previousAc;
+        const float shaped = std::abs(delta) < 1.0e-4f
+            ? exactShape(0.5f * (previousAc + ac))
+            : (exactAntiDerivative(ac) - exactAntiDerivative(previousAc)) / delta;
+        previousAc = ac;
+        shapedDcState += dcCoefficient * (shaped - shapedDcState);
+        const float exactOutput = input
+            + ((shaped - shapedDcState) * compensation - input) * amount;
+        const float tableOutput = saturator.process(input, amount);
+        maximumCurveError = juce::jmax(maximumCurveError,
+            std::abs(tableOutput - exactOutput));
+    }
+    expect(maximumCurveError < 5.0e-4f,
+           "fast ADAA curve drifted audibly from its exact reference");
+
     VoiceBuffer buffer;
     buffer.prepare(48000.0, 0.1f);
     for (int i = 0; i < 512; ++i)
@@ -137,16 +190,68 @@ void testSaturatorAndReset()
     expect(buffer.getWriteHead() == 0, "voice history reset retained its write head");
     expect(std::abs(buffer.readInterpolated(-1.0)) < 1.0e-8f,
            "voice history reset retained stale audio");
+    for (int i = 0; i < 32; ++i)
+        buffer.write(0.25f);
+    expect(std::abs(buffer.readInterpolated(15.0) - 0.25f) < 1.0e-5f,
+           "voice history did not recover after its O(1) reset");
+    expect(std::abs(buffer.readInterpolated(-1.0)) < 1.0e-8f,
+           "voice history exposed pre-reset circular-buffer contents");
+}
+
+void testDefensiveRecovery()
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    VoiceFilter filter;
+    filter.prepare(48000.0);
+    filter.setCutoffs(nan, nan);
+    for (int i = 0; i < 4096; ++i)
+    {
+        const float input = 0.3f * std::sin(juce::MathConstants<float>::twoPi
+            * 440.0f * (float) i / 48000.0f);
+        expect(std::isfinite(filter.process(input)),
+               "voice filter was poisoned by an invalid cutoff");
+    }
+    filter.setCutoffs(120.0f, 9000.0f);
+    expect(std::isfinite(filter.process(0.1f)),
+           "voice filter did not accept a valid target after invalid automation");
+
+    expect(PitchCorrector::nearestScaleMidi(nan, 0, PitchCorrector::Major) == 69,
+           "scale quantiser did not contain invalid pitch input");
+    expect(std::isfinite(PitchCorrector::midiToFreq(std::numeric_limits<int>::max())),
+           "MIDI-to-frequency conversion did not clamp an invalid note range");
+
+    // Lifecycle guards are intentionally cheap, but they prevent malformed
+    // hosts or validation tools from indexing unprepared buffers.
+    VoiceBuffer unpreparedBuffer;
+    unpreparedBuffer.write(1.0f);
+    expect(unpreparedBuffer.readInterpolated(0.0) == 0.0f,
+           "unprepared voice history did not fail closed");
+    PitchDetector unpreparedDetector;
+    unpreparedDetector.pushSample(1.0f);
+    expect(unpreparedDetector.getFrequency() == 0.0f,
+           "unprepared pitch detector did not fail closed");
+    PhaseLockedPsolaGrainVoice unpreparedVoice;
+    expect(unpreparedVoice.process(unpreparedBuffer, 1.5f, 200.0f) == 0.0f,
+           "unprepared PSOLA voice did not fail closed");
+    WarmSaturator unpreparedSaturator;
+    expect(unpreparedSaturator.process(0.1f, 0.5f) == 0.0f,
+           "unprepared saturator did not fail closed");
 }
 }
 
 int main()
 {
+    testPitchDetector(22050.0);
+    testPitchDetector(24000.0);
+    testPitchDetector(29400.0);
     testPitchDetector(44100.0);
     testPitchDetector(48000.0);
     testPitchDetector(96000.0);
+    testPitchDetector(192000.0);
     testPitchShifter();
     testSaturatorAndReset();
+    testDefensiveRecovery();
 
     if (failures != 0)
     {

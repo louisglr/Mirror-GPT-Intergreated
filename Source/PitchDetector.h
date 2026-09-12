@@ -20,12 +20,16 @@ class PitchDetector
 public:
     void prepare(double inputSampleRate)
     {
-        inputRate = juce::jmax(1.0, inputSampleRate);
-        // Most DAWs run at 44.1/48/88.2/96 kHz. Around 16 kHz preserves all
-        // F0 information needed here, while a 24 kHz-or-lower host is already
-        // cheap enough to analyse at its native rate.
-        decimationFactor = inputRate < 30000.0 ? 1
-            : juce::jmax(1, (int) std::ceil(inputRate / kTargetAnalysisRate));
+        prepared = false;
+        inputRate = std::isfinite(inputSampleRate) && inputSampleRate >= 1000.0
+            ? inputSampleRate : 44100.0;
+        // Always derive the integer factor from the target analysis rate.
+        // The former 30 kHz threshold left uncommon but valid 22.05, 24 and
+        // 29.4 kHz hosts on three different behaviours, and 29.4 kHz could not
+        // fit the full 55 Hz lag into this fixed analysis window. They now all
+        // decimate by two, yielding 11.025, 12 and 14.7 kHz respectively.
+        decimationFactor = juce::jmax(1,
+            (int) std::ceil(inputRate / kTargetAnalysisRate));
         analysisSampleRate = inputRate / (double) decimationFactor;
 
         // 896 samples are roughly 56 ms at 16 kHz: over three periods at
@@ -44,9 +48,19 @@ public:
         // using an FFT in processBlock.
         const float antiAliasHz = juce::jmin(6000.0f,
             (float) analysisSampleRate * 0.30f);
-        antiAliasCoeff = 1.0f - std::exp(-juce::MathConstants<float>::twoPi
-                                         * antiAliasHz / (float) inputRate);
+        const float nextAntiAliasCoeff = 1.0f - std::exp(
+            -juce::MathConstants<float>::twoPi * antiAliasHz / (float) inputRate);
+        antiAliasCoeff = std::isfinite(nextAntiAliasCoeff)
+            ? juce::jlimit(0.0f, 1.0f, nextAntiAliasCoeff) : 0.3f;
+        // Preserve the original ~10.5 Hz DC rejection at every host rate.  A
+        // fixed per-sample coefficient moved the corner above 45 Hz at 192 kHz
+        // and could thin low voices before pitch analysis.
+        const float nextDcRemovalCoeff = 1.0f - std::exp(
+            -juce::MathConstants<float>::twoPi * 10.5f / (float) inputRate);
+        dcRemovalCoeff = std::isfinite(nextDcRemovalCoeff)
+            ? juce::jlimit(0.0f, 1.0f, nextDcRemovalCoeff) : 0.0015f;
         reset();
+        prepared = true;
     }
 
     void reset()
@@ -90,12 +104,30 @@ public:
 
     void pushSample(float x)
     {
+        if (!prepared)
+            return;
+
         // A bad host/input sample must not poison a recursive state and leave
         // the tracker unstable for the rest of a session.
         if (!std::isfinite(x))
             x = 0.0f;
 
-        dcState += 0.0015f * (x - dcState);
+        // Recover the inexpensive recursive input front-end locally. A single
+        // invalid state must not contaminate every later detector frame, and a
+        // full history reset would be unnecessarily disruptive here.
+        if (!std::isfinite(dcState) || !std::isfinite(antiAlias1)
+            || !std::isfinite(antiAlias2) || !std::isfinite(antiAlias3)
+            || !std::isfinite(antiAlias4) || !std::isfinite(decimationSum)
+            || !std::isfinite(antiAliasCoeff) || !std::isfinite(dcRemovalCoeff))
+        {
+            dcState = antiAlias1 = antiAlias2 = antiAlias3 = antiAlias4 = 0.0f;
+            decimationSum = 0.0f;
+            decimationPhase = 0;
+            antiAliasCoeff = 0.3f;
+            dcRemovalCoeff = 0.0015f;
+        }
+
+        dcState += dcRemovalCoeff * (x - dcState);
         const float dcFree = x - dcState;
 
         antiAlias1 += antiAliasCoeff * (dcFree - antiAlias1);
@@ -185,8 +217,14 @@ private:
         // writePos points to the oldest element once the ring is full. Freeze
         // it and the range for a self-consistent frame while new audio arrives.
         snapshotWritePos = writePos;
-        snapshotIndex = 0;
-        frameEnergy = 0.0f;
+        // Lock down the oldest sample before the live ring can overwrite that
+        // slot on a following decimated input sample. The remaining copy stays
+        // work-sliced exactly as before.
+        const float first = history[(size_t) snapshotWritePos];
+        const float safeFirst = std::isfinite(first) ? first : 0.0f;
+        frame[0] = safeFirst;
+        snapshotIndex = 1;
+        frameEnergy = safeFirst * safeFirst;
         frameMinHz = expectedMinHz;
         frameMaxHz = expectedMaxHz;
         analysisState = AnalysisState::snapshot;
@@ -361,7 +399,9 @@ private:
     void markUnvoiced()
     {
         lastConfidence = 0.0f;
-        ++unvoicedFrames;
+        // This counter only distinguishes 0, 1, 2 and "three or more".  Keep
+        // it saturated so even an always-open installation cannot overflow.
+        unvoicedFrames = juce::jmin(3, unvoicedFrames + 1);
         if (unvoicedFrames >= 3)
         {
             lastFrequency = 0.0f;
@@ -427,7 +467,7 @@ private:
     int vocalRangeIndex = 0;
     float decimationSum = 0.0f, dcState = 0.0f;
     float antiAlias1 = 0.0f, antiAlias2 = 0.0f, antiAlias3 = 0.0f, antiAlias4 = 0.0f;
-    float antiAliasCoeff = 0.3f;
+    float antiAliasCoeff = 0.3f, dcRemovalCoeff = 0.0015f;
     double inputRate = 44100.0, analysisSampleRate = 16000.0;
 
     float lastFrequency = 0.0f;
@@ -448,4 +488,5 @@ private:
     int cmndTau = 1;
     float cmndRunningSum = 0.0f;
     int scanTau = 2;
+    bool prepared = false;
 };

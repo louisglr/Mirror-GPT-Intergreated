@@ -32,9 +32,11 @@
 class PhaseLockedPsolaGrainVoice
 {
 public:
-    void prepare(double sampleRateIn)
+    void prepare(double sampleRateIn, float renewalStaggerFraction = 0.0f)
     {
-        sampleRate = juce::jmax(1.0, sampleRateIn);
+        prepared = false;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn >= 1000.0
+            ? sampleRateIn : 44100.0;
 
         // Four 75%-overlapped Hann frames are COLA after normalisation.  A
         // 12 ms frame is short enough for vocal timing and still contains
@@ -43,6 +45,10 @@ public:
             (int) std::lround(sampleRate * kGrainSeconds));
         grainHop = juce::jmax(kMinimumHopSamples, requestedSize / kNumGrains);
         grainSize = grainHop * kNumGrains;
+        const float safeStagger = std::isfinite(renewalStaggerFraction)
+            ? juce::jlimit(0.0f, 0.999f, renewalStaggerFraction) : 0.0f;
+        renewalStaggerSamples = juce::jlimit(0, grainHop - 1,
+            (int) std::lround((float) grainHop * safeStagger));
 
         // This is the source look-back needed by a new grain at the largest
         // supported ratio.  At 48 kHz it is 1,737 samples (36.2 ms).  It does
@@ -68,6 +74,7 @@ public:
         unityBlendCoefficient = 1.0f - std::exp(-1.0f / (float) (sampleRate
             * kUnisonBlendSeconds));
         reset();
+        prepared = true;
     }
 
     // The nominal source delay is independent of pitch ratio.  Pitch-mark
@@ -79,12 +86,14 @@ public:
     {
         for (int i = 0; i < kNumGrains; ++i)
         {
-            age[i] = grainHop * i;
+            age[i] = initialAgeForGrain(i);
             pos[i] = 0.0;
         }
 
         initialised = false;
         hasLastWriteHead = false;
+        unityFastPathActive = false;
+        estimatedPeriodSamples = (float) sampleRate / kFallbackPitchHz;
         synthesisPhaseSamples = 0.0;
         activationGain = 0.0f;
         unityBlend = 1.0f;
@@ -94,6 +103,9 @@ public:
     // also invoked automatically when process() detects non-sequential input.
     void prime(const VoiceBuffer& vb, float pitchRatio, float sourceFrequency)
     {
+        if (!prepared)
+            return;
+
         const float safeRatio = sanitiseRatio(pitchRatio);
         const float period = updateEstimatedPeriod(sourceFrequency, true);
         const long long writeHead = vb.getWriteHead();
@@ -104,7 +116,7 @@ public:
         synthesisPhaseSamples = 0.0;
         for (int i = 0; i < kNumGrains; ++i)
         {
-            age[i] = grainHop * i;
+            age[i] = initialAgeForGrain(i);
             const double ceiling = grainCeiling(writeHead, age[i], safeRatio);
             const double marker = findPriorRisingMarker(vb, ceiling, period);
             // All primed grains begin at phase zero (a rising crossing).  The
@@ -116,14 +128,35 @@ public:
 
         initialised = true;
         hasLastWriteHead = true;
+        unityFastPathActive = false;
         lastWriteHead = writeHead;
         activationGain = 0.0f;
     }
 
     float process(const VoiceBuffer& vb, float pitchRatio, float sourceFrequency)
     {
+        if (!prepared)
+            return 0.0f;
+
         const float safeRatio = sanitiseRatio(pitchRatio);
         const long long writeHead = vb.getWriteHead();
+        const float direct = vb.readInterpolated((double) writeHead
+            - (double) fixedLatencySamples - 1.0);
+
+        // Once the transparent path has reached an exact coefficient of one,
+        // an exact-unity voice needs no grain reads at all. Do not enter this
+        // path during the crossfade. Leaving it explicitly primes a fresh,
+        // phase-consistent grain set so skipped grain state can never reappear.
+        const bool exactUnity = safeRatio == 1.0f;
+        if (exactUnity && unityBlend >= 1.0f)
+        {
+            unityBlend = 1.0f;
+            unityFastPathActive = true;
+            lastWriteHead = writeHead;
+            hasLastWriteHead = true;
+            return std::isfinite(direct) ? direct : 0.0f;
+        }
+
         float period = updateEstimatedPeriod(sourceFrequency, false);
 
         bool positionsAreValid = initialised && std::isfinite(synthesisPhaseSamples);
@@ -131,7 +164,7 @@ public:
             positionsAreValid = positionsAreValid && std::isfinite(p);
 
         const bool sequentialInput = hasLastWriteHead && writeHead == lastWriteHead + 1;
-        const bool needsPrime = !positionsAreValid || !sequentialInput;
+        const bool needsPrime = unityFastPathActive || !positionsAreValid || !sequentialInput;
         if (needsPrime)
         {
             prime(vb, safeRatio, sourceFrequency);
@@ -196,8 +229,6 @@ public:
             unityBlend = 1.0f;
         else if (unityTarget <= 0.0f && unityBlend < 0.00001f)
             unityBlend = 0.0f;
-        const float direct = vb.readInterpolated((double) writeHead
-            - (double) fixedLatencySamples - 1.0);
         const float output = granular + (direct - granular) * unityBlend;
         return std::isfinite(output) ? output : 0.0f;
     }
@@ -223,6 +254,11 @@ private:
         const float range = juce::jmax(1.0e-9f, edge1 - edge0);
         const float t = juce::jlimit(0.0f, 1.0f, (x - edge0) / range);
         return t * t * (3.0f - 2.0f * t);
+    }
+
+    int initialAgeForGrain(int grain) const
+    {
+        return (grainHop * grain + renewalStaggerSamples) % grainSize;
     }
 
     float sanitiseRatio(float ratio) const
@@ -390,6 +426,10 @@ private:
     int grainHop = 132;
     int fixedLatencySamples = 1593;
     int maxPitchMarkSearch = 1323;
+    // Different processor voices use different sub-hop offsets. Their bounded
+    // pitch-mark searches therefore no longer land on the same audio sample,
+    // avoiding periodic CPU spikes without altering any voice's COLA spacing.
+    int renewalStaggerSamples = 0;
     int age[kNumGrains] {};
     double pos[kNumGrains] {};
     std::vector<float> hannTable;
@@ -397,9 +437,11 @@ private:
     double synthesisPhaseSamples = 0.0;
     bool initialised = false;
     bool hasLastWriteHead = false;
+    bool unityFastPathActive = false;
     long long lastWriteHead = 0;
     float activationGain = 0.0f;
     float activationStep = 0.003f;
     float unityBlend = 1.0f;
     float unityBlendCoefficient = 0.004f;
+    bool prepared = false;
 };

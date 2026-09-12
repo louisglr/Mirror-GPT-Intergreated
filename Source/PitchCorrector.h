@@ -17,7 +17,8 @@ public:
 
     void prepare(double sampleRateIn)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         smoothedRatio = targetRatio = 1.0f;
         lastTracking = -1.0f;
         lastDetectedFreq = -1.0f;
@@ -30,7 +31,10 @@ public:
 
     float process(float detectedFreq, float confidence, int rootNote, int scaleType, float trackingSmooth01)
     {
-        const float tracking = juce::jlimit(0.0f, 1.0f, trackingSmooth01);
+        const float tracking = std::isfinite(trackingSmooth01)
+            ? juce::jlimit(0.0f, 1.0f, trackingSmooth01) : 1.0f;
+        rootNote = juce::jlimit(0, 11, rootNote);
+        scaleType = juce::jlimit((int) Chromatic, (int) Minor, scaleType);
         if (std::abs(tracking - lastTracking) > 1.0e-6f)
         {
             // Higher Tracking means a tighter response.  The old mapping was
@@ -67,8 +71,11 @@ public:
 
     static int nearestScaleMidi(float freq, int rootNote, int scaleType)
     {
+        if (!std::isfinite(freq) || freq <= 0.0f)
+            return 69;
         const float midiFloat = 69.0f + 12.0f * std::log2(freq / 440.0f);
-        return quantizeToScale(midiFloat, rootNote, scaleType);
+        return quantizeToScale(midiFloat, juce::jlimit(0, 11, rootNote),
+            juce::jlimit((int) Chromatic, (int) Minor, scaleType));
     }
 
     static int shiftByScaleSteps(int midiNote, int rootNote, int scaleType, int steps)
@@ -97,7 +104,8 @@ public:
 
     static float midiToFreq(int midiNote)
     {
-        return 440.0f * std::exp2((float) (midiNote - 69) / 12.0f);
+        const int safeNote = juce::jlimit(-128, 255, midiNote);
+        return 440.0f * std::exp2((float) (safeNote - 69) / 12.0f);
     }
 
     // Manual scale harmonies use this same hysteretic note state as the lead
@@ -143,6 +151,8 @@ private:
 
     static int quantizeToScale(float midiFloat, int root, int scaleType)
     {
+        if (!std::isfinite(midiFloat))
+            return 69;
         if (scaleType == Chromatic)
             return (int) std::round(midiFloat);
 

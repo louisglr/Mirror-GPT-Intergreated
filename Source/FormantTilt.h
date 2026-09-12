@@ -11,7 +11,8 @@ class FormantTilt
 public:
     void prepare(double sampleRateIn)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         lowCoeff = coefficientForHz(520.0f);
         midCoeff = coefficientForHz(1850.0f);
         presenceCoeff = coefficientForHz(5200.0f);

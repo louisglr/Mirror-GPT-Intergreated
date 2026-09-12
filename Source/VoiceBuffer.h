@@ -11,27 +11,35 @@ class VoiceBuffer
 public:
     void prepare(double sampleRate, float seconds = 1.0f)
     {
-        size = juce::jmax(1024, (int) (sampleRate * (double) seconds));
+        const double safeRate = std::isfinite(sampleRate) && sampleRate > 1.0
+            ? sampleRate : 44100.0;
+        const float safeSeconds = std::isfinite(seconds)
+            ? juce::jlimit(0.05f, 4.0f, seconds) : 1.0f;
+        size = juce::jmax(1024, (int) (safeRate * (double) safeSeconds));
         buf.assign((size_t) size, 0.0f);
         buildResampleKernels();
         reset();
     }
 
-    // Transport jumps and a host-side reset must never leave old circular
-    // history available to a freshly-primed grain reader. This intentionally
-    // reuses the existing allocation: call it on the host reset/transport path
-    // before rendering resumes; it does not change capacity or the kernel table.
+    // Transport jumps and host resets invalidate the old timeline in O(1).
+    // Every reader checks the absolute valid range, so stale circular memory
+    // can never leak into a newly primed grain.  Avoiding a full one-second
+    // buffer clear here is important when a host calls reset on a 32-sample
+    // real-time boundary at a high sample rate.
     void reset()
     {
-        std::fill(buf.begin(), buf.end(), 0.0f);
         writeHead = 0;
+        validSamples = 0;
     }
 
     void write(float x)
     {
+        if (size <= 0 || buf.empty())
+            return;
         // Never let one invalid host sample contaminate every later grain.
         buf[(size_t) wrapIndex(writeHead)] = std::isfinite(x) ? x : 0.0f;
         ++writeHead;
+        validSamples = juce::jmin(size, validSamples + 1);
     }
 
     float readInterpolated(double absPos) const
@@ -44,10 +52,10 @@ public:
 
         // Four-point Hermite interpolation is cleaner than linear
         // interpolation when a voice is read at a different speed.
-        const float y0 = buf[(size_t) wrapIndex(i0 - 1)];
-        const float y1 = buf[(size_t) wrapIndex(i0)];
-        const float y2 = buf[(size_t) wrapIndex(i0 + 1)];
-        const float y3 = buf[(size_t) wrapIndex(i0 + 2)];
+        const float y0 = sourceSample(i0 - 1);
+        const float y1 = sourceSample(i0);
+        const float y2 = sourceSample(i0 + 1);
+        const float y3 = sourceSample(i0 + 2);
         const float c1 = 0.5f * (y2 - y0);
         const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
         const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
@@ -108,7 +116,7 @@ public:
                     - resampleKernels[offset10 + kernelTap]);
             const float coefficient = phase0Coefficient + bandFraction
                 * (phase1Coefficient - phase0Coefficient);
-            output += buf[(size_t) wrapIndex(i0 + (long long) sourceOffset)] * coefficient;
+            output += sourceSample(i0 + (long long) sourceOffset) * coefficient;
         }
         return std::isfinite(output) ? output : 0.0f;
     }
@@ -119,7 +127,7 @@ public:
     // latency or an allocation on the audio thread.
     double findRisingPitchMarkAtOrBefore(double absPos, int searchRadius) const
     {
-        if (!std::isfinite(absPos) || size <= 0)
+        if (!std::isfinite(absPos) || size <= 0 || validSamples < 5)
             return (double) writeHead;
 
         const long long centre = (long long) std::floor(absPos);
@@ -163,7 +171,7 @@ public:
 
     bool isValidRisingPitchMark(double marker) const
     {
-        if (!std::isfinite(marker) || size <= 0)
+        if (!std::isfinite(marker) || size <= 0 || validSamples < 5)
             return false;
 
         const long long upperIndex = (long long) std::ceil(marker);
@@ -177,7 +185,7 @@ public:
     // The search is only performed when a grain is renewed, never per sample.
     double findNearestRisingZeroCrossing(double absPos, int searchRadius) const
     {
-        if (!std::isfinite(absPos) || size <= 0)
+        if (!std::isfinite(absPos) || size <= 0 || validSamples < 2)
             return (double) writeHead;
 
         const long long centre = (long long) std::llround(absPos);
@@ -188,8 +196,8 @@ public:
 
         for (long long i = start; i <= end; ++i)
         {
-            const float previous = buf[(size_t) wrapIndex(i - 1)];
-            const float current = buf[(size_t) wrapIndex(i)];
+            const float previous = sourceSample(i - 1);
+            const float current = sourceSample(i);
             if (std::isfinite(previous) && std::isfinite(current)
                 && previous <= 0.0f && current > 0.0f)
             {
@@ -211,7 +219,7 @@ public:
     // compromising the fixed-latency safety margin.
     double findNearestRisingZeroCrossingAtOrBefore(double absPos, int searchRadius) const
     {
-        if (!std::isfinite(absPos) || size <= 0)
+        if (!std::isfinite(absPos) || size <= 0 || validSamples < 2)
             return (double) writeHead;
 
         const long long centre = (long long) std::floor(absPos);
@@ -221,8 +229,8 @@ public:
 
         for (long long i = start; i <= centre; ++i)
         {
-            const float previous = buf[(size_t) wrapIndex(i - 1)];
-            const float current = buf[(size_t) wrapIndex(i)];
+            const float previous = sourceSample(i - 1);
+            const float current = sourceSample(i);
             if (std::isfinite(previous) && std::isfinite(current)
                 && previous <= 0.0f && current > 0.0f)
             {
@@ -282,6 +290,10 @@ private:
 
     float sourceSample(long long absoluteIndex) const
     {
+        const long long oldestRetained = writeHead - (long long) validSamples;
+        if (absoluteIndex < oldestRetained || absoluteIndex >= writeHead)
+            return 0.0f;
+
         const float sample = buf[(size_t) wrapIndex(absoluteIndex)];
         return std::isfinite(sample) ? sample : 0.0f;
     }
@@ -334,5 +346,6 @@ private:
     std::vector<float> buf;
     std::vector<float> resampleKernels;
     long long writeHead = 0;
+    int validSamples = 0;
     int size = 0;
 };

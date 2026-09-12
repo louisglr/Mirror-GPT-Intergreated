@@ -11,7 +11,8 @@ class VoiceFilter
 public:
     void prepare(double sampleRateIn)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn >= 1000.0
+            ? sampleRateIn : 44100.0;
         deEssCoeff = coefficientForHz(5400.0f);
         // Keep the dynamics and coefficient interpolation expressed in time,
         // not samples.  A 96 kHz session must not sound twice as twitchy as a
@@ -51,6 +52,11 @@ public:
         }
 
         const float shaped = lowPass.process(highPass.process(x));
+        if (!std::isfinite(shaped))
+        {
+            reset();
+            return 0.0f;
+        }
 
         deEssLow += deEssCoeff * (shaped - deEssLow);
         const float sibilance = shaped - deEssLow;
@@ -90,21 +96,41 @@ private:
     class SmoothBiquad
     {
     public:
-        void reset() { z1 = z2 = 0.0f; }
+        void reset()
+        {
+            z1 = z2 = 0.0f;
+            if (!areFinite(current) || !areFinite(target))
+                current = target = Coefficients {};
+        }
 
         void setSmoothingCoefficient(float next)
         {
-            smoothingCoefficient = juce::jlimit(0.0f, 1.0f, next);
+            smoothingCoefficient = std::isfinite(next)
+                ? juce::jlimit(0.0f, 1.0f, next) : 1.0f;
         }
 
         void setTarget(const Coefficients& c, bool immediate)
         {
+            if (!areFinite(c))
+                return;
             target = c;
             if (immediate) current = target;
         }
 
         float process(float x)
         {
+            if (!std::isfinite(x) || !std::isfinite(smoothingCoefficient)
+                || !areFinite(current) || !areFinite(target)
+                || !std::isfinite(z1) || !std::isfinite(z2))
+            {
+                current = areFinite(target) ? target : Coefficients {};
+                target = current;
+                smoothingCoefficient = std::isfinite(smoothingCoefficient)
+                    ? juce::jlimit(0.0f, 1.0f, smoothingCoefficient) : 1.0f;
+                z1 = z2 = 0.0f;
+                return 0.0f;
+            }
+
             current.b0 += smoothingCoefficient * (target.b0 - current.b0);
             current.b1 += smoothingCoefficient * (target.b1 - current.b1);
             current.b2 += smoothingCoefficient * (target.b2 - current.b2);
@@ -114,10 +140,22 @@ private:
             const float y = current.b0 * x + z1;
             z1 = current.b1 * x - current.a1 * y + z2;
             z2 = current.b2 * x - current.a2 * y;
+            if (!std::isfinite(y) || !std::isfinite(z1) || !std::isfinite(z2))
+            {
+                z1 = z2 = 0.0f;
+                return 0.0f;
+            }
             return y;
         }
 
     private:
+        static bool areFinite(const Coefficients& c)
+        {
+            return std::isfinite(c.b0) && std::isfinite(c.b1)
+                && std::isfinite(c.b2) && std::isfinite(c.a1)
+                && std::isfinite(c.a2);
+        }
+
         Coefficients current, target;
         float z1 = 0.0f, z2 = 0.0f;
         float smoothingCoefficient = 0.0025f;
@@ -126,8 +164,12 @@ private:
     void setCutoffs(float highPassHz, float lowPassHz, bool immediate)
     {
         const float sr = (float) sampleRate;
-        const float hp = juce::jlimit(35.0f, sr * 0.18f, highPassHz);
-        const float lp = juce::jlimit(hp * 1.8f, sr * 0.43f, lowPassHz);
+        const float safeHighPass = std::isfinite(highPassHz)
+            ? highPassHz : (hasCutoffTargets ? lastHighPassHz : 100.0f);
+        const float safeLowPass = std::isfinite(lowPassHz)
+            ? lowPassHz : (hasCutoffTargets ? lastLowPassHz : 12000.0f);
+        const float hp = juce::jlimit(35.0f, sr * 0.18f, safeHighPass);
+        const float lp = juce::jlimit(hp * 1.8f, sr * 0.43f, safeLowPass);
 
         // Tone values are block-rate. Avoid recalculating trigonometric
         // biquad coefficients when the effective cutoffs have not moved by
@@ -150,7 +192,11 @@ private:
 
     Coefficients makeFilter(float hz, bool highPassFilter) const
     {
-        const float omega = juce::MathConstants<float>::twoPi * hz / (float) sampleRate;
+        const float sr = std::isfinite(sampleRate) && sampleRate >= 1000.0
+            ? (float) sampleRate : 44100.0f;
+        const float safeHz = std::isfinite(hz)
+            ? juce::jlimit(1.0f, sr * 0.49f, hz) : 1000.0f;
+        const float omega = juce::MathConstants<float>::twoPi * safeHz / sr;
         const float cosine = std::cos(omega);
         const float alpha = std::sin(omega) * 0.70710678f;
         const float a0 = 1.0f + alpha;
@@ -176,13 +222,26 @@ private:
 
     float coefficientForHz(float hz) const
     {
-        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / (float) sampleRate);
+        const float sr = std::isfinite(sampleRate) && sampleRate >= 1000.0
+            ? (float) sampleRate : 44100.0f;
+        const float safeHz = std::isfinite(hz)
+            ? juce::jlimit(0.0f, sr * 0.49f, hz) : 0.0f;
+        const float coefficient = 1.0f - std::exp(
+            -juce::MathConstants<float>::twoPi * safeHz / sr);
+        return std::isfinite(coefficient)
+            ? juce::jlimit(0.0f, 1.0f, coefficient) : 0.0f;
     }
 
     float timeCoefficientMs(float milliseconds) const
     {
-        const float samples = juce::jmax(1.0f, (float) sampleRate * milliseconds * 0.001f);
-        return 1.0f - std::exp(-1.0f / samples);
+        const float sr = std::isfinite(sampleRate) && sampleRate >= 1000.0
+            ? (float) sampleRate : 44100.0f;
+        const float safeMilliseconds = std::isfinite(milliseconds)
+            ? juce::jmax(0.0f, milliseconds) : 0.0f;
+        const float samples = juce::jmax(1.0f, sr * safeMilliseconds * 0.001f);
+        const float coefficient = 1.0f - std::exp(-1.0f / samples);
+        return std::isfinite(coefficient)
+            ? juce::jlimit(0.0f, 1.0f, coefficient) : 1.0f;
     }
 
     double sampleRate = 44100.0;

@@ -8,6 +8,8 @@ MirrorAudioProcessor::MirrorAudioProcessor()
       apvts(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
     cacheParameterPointers();
+    for (auto& level : currentVoiceVisualLevels)
+        level.store(0.0f, std::memory_order_relaxed);
 }
 
 MirrorAudioProcessor::~MirrorAudioProcessor() {}
@@ -218,18 +220,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
 
 void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
 {
+    if (!std::isfinite(sampleRate) || sampleRate <= 1.0)
+        sampleRate = 44100.0;
     currentSampleRate = sampleRate;
 
     voiceBuffer.prepare(sampleRate, 1.0f);
     pitchDetector.prepare(sampleRate);
     pitchCorrector.prepare(sampleRate);
 
-    dryVoice.prepare(sampleRate);
+    dryVoice.prepare(sampleRate, 0.0f);
     reportedLatencySamples = dryVoice.getLatencySamples();
     dryAlignmentL.prepare(reportedLatencySamples + 8);
     dryAlignmentR.prepare(reportedLatencySamples + 8);
+    bypassAlignmentL.prepare(reportedLatencySamples + 8);
+    bypassAlignmentR.prepare(reportedLatencySamples + 8);
     dryAlignmentL.setDelaySamples(reportedLatencySamples);
     dryAlignmentR.setDelaySamples(reportedLatencySamples);
+    bypassAlignmentL.setDelaySamples(reportedLatencySamples);
+    bypassAlignmentR.setDelaySamples(reportedLatencySamples);
     setLatencySamples(reportedLatencySamples);
 
     dryFormantProcL.prepare(sampleRate);
@@ -237,7 +245,11 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
 
     for (int i = 0; i < kNumHarmonyVoices; ++i)
     {
-        harmonyVoices[(size_t) i].prepare(sampleRate);
+        // Spread pitch-mark renewal across each synthesis hop.  Five readers
+        // searching on one sample created a periodic CPU crest; the offset is
+        // phase-neutral inside each voice and makes callback cost more even.
+        harmonyVoices[(size_t) i].prepare(sampleRate,
+            (float) (i + 1) / (float) (kNumHarmonyVoices + 1));
         harmonyFormant[(size_t) i].prepare(sampleRate);
         harmonyFilters[(size_t) i].prepare(sampleRate);
         harmonySaturators[(size_t) i].prepare(sampleRate);
@@ -304,12 +316,18 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     midiRetargetFadeOutStep = 1.0f / (float) juce::jmax(1.0, sampleRate * 0.006);
     midiRetargetFadeInStep = 1.0f / (float) juce::jmax(1.0, sampleRate * 0.012);
     voiceRenderGains.fill(0.0f);
+    voiceDspWasRunning.fill(false);
 
     dryLevelSmoothed.reset(sampleRate, 0.03);
     harmonyLevelSmoothed.reset(sampleRate, 0.03);
     dryWidthSmoothed.reset(sampleRate, 0.05);
     outputGainSmoothed.reset(sampleRate, 0.04);
+    dryPanGainLSmoothed.reset(sampleRate, 0.015);
+    dryPanGainRSmoothed.reset(sampleRate, 0.015);
+    dryPitchSemitonesSmoothed.reset(sampleRate, 0.020);
+    midiVelocitySmoothed.reset(sampleRate, 0.015);
     dryPitchBlendSmoothed.reset(sampleRate, 0.025);
+    hostBypassMixSmoothed.reset(sampleRate, 0.006);
     dryFormantSmoothed.reset(sampleRate, 0.025);
     ambienceSmoothed.reset(sampleRate, 0.050);
     globalSaturationSmoothed.reset(sampleRate, 0.025);
@@ -317,6 +335,8 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     for (auto& s : voicePanSmoothed) s.reset(sampleRate, 0.05);
     for (auto& s : voiceSaturationSmoothed) s.reset(sampleRate, 0.025);
     for (auto& s : voiceMicroDelaySmoothed) s.reset(sampleRate, 0.025);
+    for (auto& s : voiceVibratoSmoothed) s.reset(sampleRate, 0.020);
+    for (auto& s : voiceVibratoRateSmoothed) s.reset(sampleRate, 0.020);
     for (auto& s : voiceFormantSmoothed)
     {
         s.reset(sampleRate, 0.006);
@@ -330,8 +350,19 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     harmonyLevelSmoothed.setCurrentAndTargetValue(1.0f);
     dryWidthSmoothed.setCurrentAndTargetValue(parameterValues.dryWidth->load(std::memory_order_relaxed));
     outputGainSmoothed.setCurrentAndTargetValue(parameterValues.outputGain->load(std::memory_order_relaxed));
-    const float initialDryPitch = std::abs(parameterValues.dryPitch->load(std::memory_order_relaxed));
-    dryPitchBlendSmoothed.setCurrentAndTargetValue(initialDryPitch >= 0.005f ? 1.0f : 0.0f);
+    const float initialDryPan = juce::jlimit(-1.0f, 1.0f,
+        parameterValues.dryPan->load(std::memory_order_relaxed));
+    const float initialDryPanPosition = (initialDryPan * 0.5f + 0.5f)
+        * juce::MathConstants<float>::halfPi;
+    dryPanGainLSmoothed.setCurrentAndTargetValue(std::cos(initialDryPanPosition) * 1.4142f);
+    dryPanGainRSmoothed.setCurrentAndTargetValue(std::sin(initialDryPanPosition) * 1.4142f);
+    const float initialDryPitchSemitones = parameterValues.dryPitch->load(std::memory_order_relaxed);
+    dryPitchSemitonesSmoothed.setCurrentAndTargetValue(initialDryPitchSemitones);
+    dryPitchBlendSmoothed.setCurrentAndTargetValue(
+        std::abs(initialDryPitchSemitones) >= 0.005f ? 1.0f : 0.0f);
+    midiVelocitySmoothed.setCurrentAndTargetValue(
+        parameterValues.midiVelocity->load(std::memory_order_relaxed));
+    hostBypassMixSmoothed.setCurrentAndTargetValue(0.0f);
     dryFormantSmoothed.setCurrentAndTargetValue(parameterValues.dryFormant->load(std::memory_order_relaxed));
     ambienceSmoothed.setCurrentAndTargetValue(parameterValues.ambience->load(std::memory_order_relaxed));
     globalSaturationSmoothed.setCurrentAndTargetValue(parameterValues.globalSaturation->load(std::memory_order_relaxed));
@@ -344,12 +375,24 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
         voiceSaturationSmoothed[(size_t) i].setCurrentAndTargetValue(initialSaturation);
         voiceMicroDelaySmoothed[(size_t) i].setCurrentAndTargetValue(
             parameterValues.voiceMicroDelay[(size_t) i]->load(std::memory_order_relaxed));
+        voiceVibratoSmoothed[(size_t) i].setCurrentAndTargetValue(
+            parameterValues.voiceVibrato[(size_t) i]->load(std::memory_order_relaxed));
+        voiceVibratoRateSmoothed[(size_t) i].setCurrentAndTargetValue(
+            parameterValues.voiceVibratoRate[(size_t) i]->load(std::memory_order_relaxed));
     }
 }
 
 void MirrorAudioProcessor::releaseResources()
 {
     resetProcessingState(true);
+}
+
+void MirrorAudioProcessor::reset()
+{
+    resetProcessingState(true);
+    hasHostTransportPosition = false;
+    hasHostPpqPosition = false;
+    lastHostWasPlaying = false;
 }
 
 bool MirrorAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -731,8 +774,39 @@ void MirrorAudioProcessor::enqueueMidiMessage(const juce::MidiMessage& message, 
         return;
     }
 
-    if (queuedMidiEventCount >= kMaxQueuedMidiEvents)
+    // Leave capacity for note releases under a pathological MIDI burst. A
+    // dropped Note On is inaudible; a dropped Note Off can leave a harmony
+    // stuck indefinitely. Panic already clears the queue above.
+    constexpr int releaseReserve = 32;
+    const bool safetyRelease = event.kind == QueuedMidiKind::noteOff
+        || event.kind == QueuedMidiKind::allNotesOff
+        || (event.kind == QueuedMidiKind::sustain && event.data == 0);
+    if (!safetyRelease
+        && queuedMidiEventCount >= kMaxQueuedMidiEvents - releaseReserve)
         return;
+
+    if (queuedMidiEventCount >= kMaxQueuedMidiEvents)
+    {
+        // Prefer evicting an event that can only start/extend sound. Keep all
+        // existing release events intact. In normal use the reserved slots
+        // mean this branch is never reached.
+        int victim = -1;
+        for (int i = queuedMidiEventCount - 1; i >= 0; --i)
+        {
+            const auto& queued = queuedMidiEvents[(size_t) i];
+            if (queued.kind == QueuedMidiKind::noteOn
+                || (queued.kind == QueuedMidiKind::sustain && queued.data != 0))
+            {
+                victim = i;
+                break;
+            }
+        }
+        if (victim < 0)
+            return;
+        for (int i = victim + 1; i < queuedMidiEventCount; ++i)
+            queuedMidiEvents[(size_t) (i - 1)] = queuedMidiEvents[(size_t) i];
+        --queuedMidiEventCount;
+    }
 
     int insertion = queuedMidiEventCount;
     while (insertion > 0
@@ -886,12 +960,20 @@ bool MirrorAudioProcessor::detectTransportDiscontinuity(int blockSize)
                 seamlessLoopWrap = wasNearLoopEnd && isNearLoopStart;
             }
         }
+        const bool nonSequential = deviation < -1 || deviation > 1;
+        const bool positionUnchanged = *timeInSamples == lastHostSamplePosition;
         const bool jumpedWhilePlaying = isPlaying && lastHostWasPlaying
-            && (deviation < -1 || deviation > 1) && !seamlessLoopWrap;
-        // Preserve the declared ambience tail when playback stops; clear old
-        // circular history immediately before a restart instead.
-        const bool restartedPlayback = isPlaying && !lastHostWasPlaying;
-        discontinuity = jumpedWhilePlaying || restartedPlayback;
+            && nonSequential && !seamlessLoopWrap;
+        // Do not reset merely because Play was pressed: hosts commonly render
+        // a PDC pre-roll before that flag changes, and clearing it would erase
+        // the opening consonant. A real relocated playhead is still reset,
+        // including a seek made while stopped. Repeated stopped callbacks at
+        // one stationary sample position are intentionally ignored.
+        const bool relocatedAcrossStart = isPlaying && !lastHostWasPlaying
+            && nonSequential && !positionUnchanged;
+        const bool relocatedWhileStopped = !isPlaying && !lastHostWasPlaying
+            && nonSequential && !positionUnchanged;
+        discontinuity = jumpedWhilePlaying || relocatedAcrossStart || relocatedWhileStopped;
     }
 
     hasHostTransportPosition = true;
@@ -912,6 +994,8 @@ void MirrorAudioProcessor::resetProcessingState(bool clearMidiState)
     dryVoice.reset();
     dryAlignmentL.reset();
     dryAlignmentR.reset();
+    bypassAlignmentL.reset();
+    bypassAlignmentR.reset();
     dryFormantProcL.reset();
     dryFormantProcR.reset();
 
@@ -925,7 +1009,9 @@ void MirrorAudioProcessor::resetProcessingState(bool clearMidiState)
         harmonyHumanize[voice].reset();
         harmonyMicroDelay[voice].reset();
         voiceRatioSmoothed[voice] = 1.0f;
+        voiceVibratoPhase[voice] = (float) i * 0.91f;
         voiceRenderGains[voice] = 0.0f;
+        voiceDspWasRunning[voice] = false;
         midiPendingTargets[voice] = false;
         midiRetargetGains[voice] = 1.0f;
     }
@@ -946,6 +1032,11 @@ void MirrorAudioProcessor::resetProcessingState(bool clearMidiState)
     lastStableBaseMidi = 69;
     lastHandledPitchRevision = pitchDetector.getRevision();
     queuedMidiEventCount = 0;
+    currentDetectedFreq.store(0.0f, std::memory_order_relaxed);
+    currentConfidence.store(0.0f, std::memory_order_relaxed);
+    currentHeldNoteCount.store(0, std::memory_order_relaxed);
+    for (auto& level : currentVoiceVisualLevels)
+        level.store(0.0f, std::memory_order_relaxed);
 
     if (clearMidiState)
     {
@@ -958,7 +1049,21 @@ void MirrorAudioProcessor::resetProcessingState(bool clearMidiState)
     }
 }
 
-void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
+                                        juce::MidiBuffer& midiMessages)
+{
+    processAudioBlock(buffer, midiMessages, false);
+}
+
+void MirrorAudioProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
+                                                juce::MidiBuffer& midiMessages)
+{
+    processAudioBlock(buffer, midiMessages, true);
+}
+
+void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
+                                             juce::MidiBuffer& midiMessages,
+                                             bool hostBypassed)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -966,6 +1071,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     const int inputChannels = getTotalNumInputChannels();
     if (numSamples <= 0 || inputChannels < 1 || buffer.getNumChannels() < 2)
         return;
+
+    hostBypassMixSmoothed.setTargetValue(hostBypassed ? 1.0f : 0.0f);
 
     if (detectTransportDiscontinuity(numSamples))
         // A genuine seek/restart is also a MIDI panic; otherwise a timeline
@@ -1037,12 +1144,17 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     const float dryPanP = parameterValues.dryPan->load(std::memory_order_relaxed);
     const float dryFormantP = parameterValues.dryFormant->load(std::memory_order_relaxed);
     const float dryPitchSemis = parameterValues.dryPitch->load(std::memory_order_relaxed);
-    const float dryPitchRatio = std::exp2(dryPitchSemis / 12.0f);
 
     dryLevelSmoothed.setTargetValue(parameterValues.dry->load(std::memory_order_relaxed));
     harmonyLevelSmoothed.setTargetValue(1.0f);
     dryWidthSmoothed.setTargetValue(parameterValues.dryWidth->load(std::memory_order_relaxed));
     outputGainSmoothed.setTargetValue(parameterValues.outputGain->load(std::memory_order_relaxed));
+    const float dryPanPos = (juce::jlimit(-1.0f, 1.0f, dryPanP) * 0.5f + 0.5f)
+        * juce::MathConstants<float>::halfPi;
+    dryPanGainLSmoothed.setTargetValue(std::cos(dryPanPos) * 1.4142f);
+    dryPanGainRSmoothed.setTargetValue(std::sin(dryPanPos) * 1.4142f);
+    dryPitchSemitonesSmoothed.setTargetValue(dryPitchSemis);
+    midiVelocitySmoothed.setTargetValue(midiVelocitySensitivity);
     const float dryPitchMagnitude = std::abs(dryPitchSemis);
     dryPitchBlendSmoothed.setTargetValue(dryPitchMagnitude >= 0.005f ? 1.0f : 0.0f);
     dryFormantSmoothed.setTargetValue(dryFormantP);
@@ -1060,7 +1172,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         const size_t voice = (size_t) i;
         vp[voice].enable = parameterValues.voiceEnable[voice]->load(std::memory_order_relaxed) > 0.5f;
         vp[voice].solo = parameterValues.voiceSolo[voice]->load(std::memory_order_relaxed) > 0.5f;
-        vp[voice].intervalIdx = (int) parameterValues.voiceInterval[voice]->load(std::memory_order_relaxed);
+        vp[voice].intervalIdx = juce::jlimit(0, kNumMusicalIntervals - 1,
+            (int) parameterValues.voiceInterval[voice]->load(std::memory_order_relaxed));
         vp[voice].formant = parameterValues.voiceFormant[voice]->load(std::memory_order_relaxed)
                                   + character * 0.08f * ((i % 2 == 0) ? 1.0f : -1.0f);
         vp[voice].fineTune = parameterValues.voiceFineTune[voice]->load(std::memory_order_relaxed);
@@ -1077,6 +1190,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         voiceLevelSmoothed[voice].setTargetValue(parameterValues.voiceLevel[voice]->load(std::memory_order_relaxed));
         voiceSaturationSmoothed[voice].setTargetValue(vp[voice].saturation);
         voiceMicroDelaySmoothed[voice].setTargetValue(vp[voice].microDelayMs);
+        voiceVibratoSmoothed[voice].setTargetValue(vp[voice].vibrato);
+        voiceVibratoRateSmoothed[voice].setTargetValue(vp[voice].vibratoRate);
         float panSpreadAmt = juce::jlimit(0.0f, 2.0f, spread + character * 0.1f);
         voicePanSmoothed[voice].setTargetValue(
             parameterValues.voicePan[voice]->load(std::memory_order_relaxed) * panSpreadAmt);
@@ -1165,11 +1280,6 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         ? 26.0f
         : 38.0f;
     const float glideCoeff = 1.0f - std::exp(-1.0f / (float) (currentSampleRate * glideTimeMs * 0.001));
-    const float dryPanPos = (juce::jlimit(-1.0f, 1.0f, dryPanP) * 0.5f + 0.5f)
-                          * juce::MathConstants<float>::halfPi;
-    const float dryPanGainL = std::cos(dryPanPos) * 1.4142f;
-    const float dryPanGainR = std::sin(dryPanPos) * 1.4142f;
-
     auto* channelL = buffer.getWritePointer(0);
     auto* channelR = buffer.getWritePointer(1);
 
@@ -1214,6 +1324,9 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         if (!std::isfinite(monoIn))
             monoIn = 0.0f;
 
+        const float latencyMatchedBypassL = bypassAlignmentL.process(dryL);
+        const float latencyMatchedBypassR = bypassAlignmentR.process(dryR);
+
         voiceBuffer.write(monoIn);
         pitchDetector.pushSample(monoIn);
 
@@ -1247,13 +1360,18 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         if (!std::isfinite(leadRatio))
             leadRatio = frozenLeadRatio = 1.0f;
 
-        // Keep both dry paths alive at all times.  Previously, setting Dry
-        // Pitch away from zero froze the alignment delays; returning to zero
-        // then replayed old audio for one latency period.  A short crossfade
-        // also prevents a click or abrupt stereo collapse while automating.
+        // The aligned stereo path is always live. The granular path may sleep
+        // at a stable zero pitch; on departure it detects the skipped history,
+        // primes with a short activation fade, and enters underneath this
+        // longer crossfade without replaying stale audio.
         const float alignedL = dryAlignmentL.process(dryL);
         const float alignedR = dryAlignmentR.process(dryR);
-        const float shifted = dryVoice.process(voiceBuffer, dryPitchRatio, detectedFreq);
+        const float dryPitchSemisNow = dryPitchSemitonesSmoothed.getNextValue();
+        const bool renderDryPitch = dryPitchBlendSmoothed.isSmoothing()
+            || dryPitchBlendSmoothed.getTargetValue() > 1.0e-5f;
+        const float shifted = renderDryPitch
+            ? dryVoice.process(voiceBuffer, std::exp2(dryPitchSemisNow / 12.0f), detectedFreq)
+            : 0.0f;
         const float dryPitchBlend = dryPitchBlendSmoothed.getNextValue();
         // The pitch generator is intentionally mono-centred, but the original
         // input side is preserved around it. This prevents any non-zero Dry
@@ -1261,7 +1379,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         // adding another full granular reader to the real-time CPU budget.
         const float alignedSide = 0.5f * (alignedL - alignedR);
         const float dryPitchDistance = juce::jlimit(0.0f, 1.0f,
-            dryPitchMagnitude / 12.0f);
+            std::abs(dryPitchSemisNow) / 12.0f);
         const float pitchedSide = alignedSide * juce::jmap(dryPitchDistance, 0.90f, 0.55f);
         const float shiftedL = shifted + pitchedSide;
         const float shiftedR = shifted - pitchedSide;
@@ -1271,7 +1389,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         // of that movement makes upward voices less chipmunk-like and
         // downward voices less muffled; the user control remains additive.
         const float dryFormantAmount = juce::jlimit(-1.0f, 1.0f,
-            dryFormantSmoothed.getNextValue() - 0.45f * dryPitchSemis / 12.0f);
+            dryFormantSmoothed.getNextValue() - 0.45f * dryPitchSemisNow / 12.0f);
         // Keep the all-pass state warm even at a neutral amount.  Skipping it
         // at exactly zero leaves stale state behind and makes a later formant
         // automation move less predictable.
@@ -1305,8 +1423,8 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float side = 0.5f * (dryProcL - dryProcR) * dryWidthNow;
         float widenedL = mid + side;
         float widenedR = mid - side;
-        float dryOutL = widenedL * dryPanGainL;
-        float dryOutR = widenedR * dryPanGainR;
+        float dryOutL = widenedL * dryPanGainLSmoothed.getNextValue();
+        float dryOutR = widenedR * dryPanGainRSmoothed.getNextValue();
 
         float harmonySumL = 0.0f, harmonySumR = 0.0f;
 
@@ -1336,10 +1454,13 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         float stackGainSum = 0.0f;
         float stackGainSquares = 0.0f;
         float stackVoiceWeight = 0.0f;
+        const float midiVelocitySensitivityNow = midiVelocitySmoothed.getNextValue();
 
         for (int i = 0; i < kNumHarmonyVoices; ++i)
         {
             const size_t voice = (size_t) i;
+            const float vibratoAmountNow = voiceVibratoSmoothed[voice].getNextValue();
+            const float vibratoRateNow = voiceVibratoRateSmoothed[voice].getNextValue();
             const bool controlsActive = vp[voice].enable && (!anySolo || vp[voice].solo);
             const bool requestedActive = controlsActive && (mode != 1 || numHeldNotes > 0);
 
@@ -1376,25 +1497,36 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             retargetGain = juce::jlimit(0.0f, 1.0f, retargetGain);
             midiRetargetGains[voice] = retargetGain;
 
-            // Keep granular read heads and short internal delay lines moving
-            // even while a voice is inaudible.  The phase-locked reader has
-            // no allocation/reset in the callback; clocking it here prevents
-            // a re-enabled voice from reading a stale circular-buffer region.
-            // The processing path remains fully allocation-free.
+            // Render through the release tail, then let a truly silent voice
+            // sleep. This removes the most expensive sustained CPU work while
+            // preserving every audible sample; reactivation is safely primed
+            // below and remains allocation-free.
             const bool renderVoice = requestedActive || gate > 1.0e-4f;
             if (!renderVoice)
             {
                 voiceRatioSmoothed[voice] += (1.0f - voiceRatioSmoothed[voice]) * glideCoeff;
                 if (!std::isfinite(voiceRatioSmoothed[voice]))
                     voiceRatioSmoothed[voice] = 1.0f;
-                (void) harmonyVoices[voice].process(voiceBuffer, voiceRatioSmoothed[voice], detectedFreq);
-                (void) harmonyFormant[voice].process(0.0f, voiceFormantSmoothed[voice].getNextValue());
-                (void) harmonySaturators[voice].process(0.0f, voiceSaturationSmoothed[voice].getNextValue());
-                (void) harmonyFilters[voice].process(0.0f);
-                (void) harmonyMicroDelay[voice].process(0.0f, voiceMicroDelaySmoothed[voice].getNextValue());
+                (void) voiceFormantSmoothed[voice].getNextValue();
+                (void) voiceSaturationSmoothed[voice].getNextValue();
+                (void) voiceMicroDelaySmoothed[voice].getNextValue();
                 (void) voiceLevelSmoothed[voice].getNextValue();
                 (void) voicePanSmoothed[voice].getNextValue();
+                voiceDspWasRunning[voice] = false;
                 continue;
+            }
+
+            if (!voiceDspWasRunning[voice])
+            {
+                // The PSOLA reader notices the skipped VoiceBuffer positions
+                // and primes itself with its own short activation fade. Clear
+                // the cheaper recursive colour/delay stages once here so an
+                // old disabled voice can never reappear as a click or echo.
+                harmonyFormant[voice].reset();
+                harmonySaturators[voice].reset();
+                harmonyFilters[voice].reset();
+                harmonyMicroDelay[voice].reset();
+                voiceDspWasRunning[voice] = true;
             }
 
             auto hz = harmonyHumanize[voice].tick(humanizeAmt);
@@ -1436,16 +1568,16 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             // Vibrato is a continuous sine modulation, deliberately separate
             // from Humanize's random drift to avoid zipper/saw artefacts.
             float readRatio = juce::jlimit(0.25f, 4.0f, voiceRatioSmoothed[voice]);
-            if (vp[voice].vibrato > 1.0e-4f)
+            if (vibratoAmountNow > 1.0e-4f)
             {
-                const float vibratoRateHz = juce::jmap(vp[voice].vibratoRate, 3.0f, 7.2f)
+                const float vibratoRateHz = juce::jmap(vibratoRateNow, 3.0f, 7.2f)
                     + (float) i * 0.12f;
                 voiceVibratoPhase[voice] += juce::MathConstants<float>::twoPi
                     * vibratoRateHz / (float) currentSampleRate;
                 if (voiceVibratoPhase[voice] >= juce::MathConstants<float>::twoPi)
                     voiceVibratoPhase[voice] -= juce::MathConstants<float>::twoPi;
                 const float vibratoCents = std::sin(voiceVibratoPhase[voice])
-                    * vp[voice].vibrato * 16.0f;
+                    * vibratoAmountNow * 16.0f;
                 readRatio *= juce::jmax(0.5f, 1.0f + vibratoCents * centsToRatio);
             }
 
@@ -1473,7 +1605,7 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             if (mode == 1)
             {
                 const float velocityGain = 0.35f + 0.65f * midiAssignedVelocities[voice];
-                raw *= 1.0f + midiVelocitySensitivity * (velocityGain - 1.0f);
+                raw *= 1.0f + midiVelocitySensitivityNow * (velocityGain - 1.0f);
             }
 
             // Modulating a short fractional delay is effectively a second
@@ -1552,8 +1684,9 @@ void MirrorAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         // The stereo-linked limiter above already enforces the final ceiling.
         // Avoiding a second per-channel soft-clip keeps dense harmony peaks
         // wide and clean rather than adding a different distortion to L/R.
-        channelL[n] = outL;
-        channelR[n] = outR;
+        const float bypassMix = hostBypassMixSmoothed.getNextValue();
+        channelL[n] = outL + (latencyMatchedBypassL - outL) * bypassMix;
+        channelR[n] = outR + (latencyMatchedBypassR - outR) * bypassMix;
     }
 
     advanceQueuedMidiEvents(numSamples);
