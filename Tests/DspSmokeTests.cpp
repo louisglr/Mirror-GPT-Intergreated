@@ -137,26 +137,26 @@ void testSaturatorAndReset()
     // future CPU optimisation cannot silently change the saturation colour.
     saturator.prepare(48000.0);
     constexpr float amount = 0.73f;
-    const float drive = 1.0f + 2.4f * amount;
-    const float bias = 0.070f * amount;
-    const float biasValue = std::tanh(drive * bias);
-    const float normaliser = juce::jmax(0.1f, std::tanh(drive));
-    const float compensation = 1.0f / (1.0f + 0.10f * amount);
+    const double drive = 1.0 + 2.4 * (double) amount;
+    const double bias = 0.070 * (double) amount;
+    const double biasValue = std::tanh(drive * bias);
+    const double normaliser = juce::jmax(0.1, std::tanh(drive));
+    const double compensation = 1.0 / (1.0 + 0.10 * (double) amount);
     const float dcCoefficient = 1.0f - std::exp(
         -juce::MathConstants<float>::twoPi * 18.0f / 48000.0f);
     float dcState = 0.0f, shapedDcState = 0.0f, previousAc = 0.0f;
     float maximumCurveError = 0.0f;
-    const auto exactLogCosh = [] (float x)
+    const auto exactLogCosh = [] (double x)
     {
-        const float magnitude = std::abs(x);
-        return magnitude + std::log1p(std::exp(-2.0f * magnitude))
-            - 0.6931471805599453f;
+        const double magnitude = std::abs(x);
+        return magnitude + std::log1p(std::exp(-2.0 * magnitude))
+            - 0.6931471805599453094;
     };
-    const auto exactShape = [=] (float x)
+    const auto exactShape = [=] (double x)
     {
         return (std::tanh((x + bias) * drive) - biasValue) / normaliser;
     };
-    const auto exactAntiDerivative = [=] (float x)
+    const auto exactAntiDerivative = [=] (double x)
     {
         return (exactLogCosh((x + bias) * drive) / drive - x * biasValue)
             / normaliser;
@@ -169,18 +169,21 @@ void testSaturatorAndReset()
         const float ac = input - dcState;
         const float delta = ac - previousAc;
         const float shaped = std::abs(delta) < 1.0e-4f
-            ? exactShape(0.5f * (previousAc + ac))
-            : (exactAntiDerivative(ac) - exactAntiDerivative(previousAc)) / delta;
+            ? (float) exactShape(0.5 * (double) (previousAc + ac))
+            : (float) ((exactAntiDerivative((double) ac)
+                - exactAntiDerivative((double) previousAc)) / (double) delta);
         previousAc = ac;
         shapedDcState += dcCoefficient * (shaped - shapedDcState);
-        const float exactOutput = input
-            + ((shaped - shapedDcState) * compensation - input) * amount;
+        const float exactOutput = input + (float) ((((double) shaped
+            - (double) shapedDcState) * compensation - (double) input)
+                * (double) amount);
         const float tableOutput = saturator.process(input, amount);
         maximumCurveError = juce::jmax(maximumCurveError,
             std::abs(tableOutput - exactOutput));
     }
     expect(maximumCurveError < 5.0e-4f,
-           "fast ADAA curve drifted audibly from its exact reference");
+           "fast ADAA curve drifted from its exact reference by "
+               + std::to_string(maximumCurveError));
 
     VoiceBuffer buffer;
     buffer.prepare(48000.0, 0.1f);

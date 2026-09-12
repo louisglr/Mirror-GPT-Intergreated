@@ -87,10 +87,10 @@ public:
         const float shaped = std::abs(delta) < 1.0e-4f
             ? shapeAt(0.5f * (previousAc + ac), cachedDrive, cachedBias,
                       cachedBiasValue, cachedNormaliser)
-            : (antiDerivative(ac, cachedDrive, cachedBias, cachedBiasValue,
-                              cachedNormaliser)
-                - antiDerivative(previousAc, cachedDrive, cachedBias,
-                                 cachedBiasValue, cachedNormaliser)) / delta;
+            : (float) ((antiDerivative((double) ac, cachedDrive, cachedBias,
+                                       cachedBiasValue, cachedNormaliser)
+                - antiDerivative((double) previousAc, cachedDrive, cachedBias,
+                                 cachedBiasValue, cachedNormaliser)) / (double) delta);
         previousAc = ac;
         // Asymmetry creates musically useful even harmonics, but it must not
         // leak a DC component into the following filters/delay lines.
@@ -130,36 +130,37 @@ private:
         return (fastTanh((input + bias) * drive) - biasValue) / normaliser;
     }
 
-    static float exactLogCosh(float x)
+    static double exactLogCosh(double x)
     {
         // log(cosh(x)) written without an overflowing cosh() call.  The vocal
         // path can occasionally receive a hot pre-fader signal, and a robust
         // nonlinear stage must stay finite even then.
-        const float magnitude = std::abs(x);
-        return magnitude + std::log1p(std::exp(-2.0f * magnitude))
-            - 0.6931471805599453f;
+        const double magnitude = std::abs(x);
+        return magnitude + std::log1p(std::exp(-2.0 * magnitude))
+            - kLogTwo;
     }
 
-    float antiDerivative(float input, float drive, float bias,
-                         float biasValue, float normaliser) const
+    double antiDerivative(double input, float drive, float bias,
+                          float biasValue, float normaliser) const
     {
         // d/dx [log(cosh(d*(x+b)))/d - x*tanh(d*b)] equals the
         // zero-centred asymmetric tanh in shapeAt().
-        return (fastLogCosh((input + bias) * drive) / drive - input * biasValue)
-            / normaliser;
+        return (fastLogCosh((input + (double) bias) * (double) drive)
+                    / (double) drive - input * (double) biasValue)
+            / (double) normaliser;
     }
 
     void buildCurveTables()
     {
         for (int i = 0; i < kTableSize; ++i)
         {
-            const float x = -kTableRange + (float) i * kTableStep;
+            const double x = -kTableRange + (double) i * kTableStep;
             tanhTable[(size_t) i] = std::tanh(x);
             logCoshTable[(size_t) i] = exactLogCosh(x);
         }
     }
 
-    float fastTanh(float x) const
+    float fastTanh(double x) const
     {
         if (!std::isfinite(x))
             return 0.0f;
@@ -168,38 +169,38 @@ private:
         if (x >= kTableRange)
             return 1.0f;
 
-        const float tablePosition = (x + kTableRange) * kInverseTableStep;
+        const double tablePosition = (x + kTableRange) * kInverseTableStep;
         const int index = juce::jlimit(0, kTableSize - 2, (int) tablePosition);
-        const float fraction = tablePosition - (float) index;
-        const float a = tanhTable[(size_t) index];
-        return a + (tanhTable[(size_t) (index + 1)] - a) * fraction;
+        const double fraction = tablePosition - (double) index;
+        const double a = tanhTable[(size_t) index];
+        return (float) (a + (tanhTable[(size_t) (index + 1)] - a) * fraction);
     }
 
-    float fastLogCosh(float x) const
+    double fastLogCosh(double x) const
     {
         if (!std::isfinite(x))
             return 0.0f;
 
-        const float magnitude = std::abs(x);
+        const double magnitude = std::abs(x);
         if (magnitude >= kTableRange)
             // The omitted log1p(exp(-2*|x|)) term is below 4e-11 at the
             // boundary. This is both cheaper and numerically continuous.
             return magnitude - kLogTwo;
 
-        const float tablePosition = (x + kTableRange) * kInverseTableStep;
+        const double tablePosition = (x + kTableRange) * kInverseTableStep;
         const int index = juce::jlimit(0, kTableSize - 2, (int) tablePosition);
-        const float t = tablePosition - (float) index;
-        const float t2 = t * t;
-        const float t3 = t2 * t;
+        const double t = tablePosition - (double) index;
+        const double t2 = t * t;
+        const double t3 = t2 * t;
 
         // Cubic Hermite interpolation uses tanh as the exact derivative of
         // log(cosh). Unlike linear interpolation, its slope is continuous at
         // table boundaries, which is important because ADAA differentiates
         // this antiderivative through a finite difference.
-        const float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-        const float h10 = t3 - 2.0f * t2 + t;
-        const float h01 = -2.0f * t3 + 3.0f * t2;
-        const float h11 = t3 - t2;
+        const double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+        const double h10 = t3 - 2.0 * t2 + t;
+        const double h01 = -2.0 * t3 + 3.0 * t2;
+        const double h11 = t3 - t2;
         return h00 * logCoshTable[(size_t) index]
             + h10 * kTableStep * tanhTable[(size_t) index]
             + h01 * logCoshTable[(size_t) (index + 1)]
@@ -207,10 +208,10 @@ private:
     }
 
     static constexpr int kTableSize = 2049;
-    static constexpr float kTableRange = 12.0f;
-    static constexpr float kTableStep = 2.0f * kTableRange / (float) (kTableSize - 1);
-    static constexpr float kInverseTableStep = 1.0f / kTableStep;
-    static constexpr float kLogTwo = 0.6931471805599453f;
+    static constexpr double kTableRange = 12.0;
+    static constexpr double kTableStep = 2.0 * kTableRange / (double) (kTableSize - 1);
+    static constexpr double kInverseTableStep = 1.0 / kTableStep;
+    static constexpr double kLogTwo = 0.6931471805599453094;
 
     double sampleRate = 44100.0;
     float dcCoeff = 0.002f, dcState = 0.0f, shapedDcState = 0.0f;
@@ -218,8 +219,11 @@ private:
     float cachedAmount = 0.0f, cachedDrive = 1.0f, cachedBias = 0.0f;
     float cachedNormaliser = 1.0f, cachedBiasValue = 0.0f;
     float cachedCompensation = 1.0f;
-    std::array<float, kTableSize> tanhTable {};
-    std::array<float, kTableSize> logCoshTable {};
+    // Double table values make the finite difference quiet even when two
+    // adjacent audio samples are very close. This is a small, fixed per-instance
+    // memory cost and never allocates from the real-time thread.
+    std::array<double, kTableSize> tanhTable {};
+    std::array<double, kTableSize> logCoshTable {};
     bool hasCachedCurve = false;
     bool prepared = false;
 };
