@@ -84,7 +84,9 @@ void testPitchDetector(double sampleRate)
     const float detected = detector.getFrequency();
     expect(std::isfinite(detected), "pitch detector frequency is non-finite");
     expect(std::abs(detected - sourceHz) < 2.0f,
-           "pitch detector missed 200 Hz at " + std::to_string((int) sampleRate) + " Hz");
+           "pitch detector measured " + std::to_string(detected)
+               + " Hz instead of 200 Hz at "
+               + std::to_string((int) sampleRate) + " Hz");
     expect(detector.getConfidence() > 0.75f,
            "pitch detector confidence is unexpectedly low at "
                + std::to_string((int) sampleRate) + " Hz");

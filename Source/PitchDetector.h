@@ -217,7 +217,11 @@ private:
         const float s2 = cmnd[(size_t) (tauEstimate + 1)];
         const float denominator = 2.0f * s1 - s2 - s0;
         if (std::abs(denominator) > 1.0e-9f)
-            betterTau += 0.5f * (s0 - s2) / denominator;
+            // Parabolic interpolation around the CMND minimum.  The
+            // numerator sign matters: the opposite sign mirrors the vertex
+            // around the integer bin and was about 2.75 Hz sharp for a
+            // 200 Hz input at 44.1 kHz (73.5 analysis samples per period).
+            betterTau += 0.5f * (s2 - s0) / denominator;
 
         const float confidence = juce::jlimit(0.0f, 1.0f, 1.0f - s1);
         float candidate = betterTau > 1.0f
