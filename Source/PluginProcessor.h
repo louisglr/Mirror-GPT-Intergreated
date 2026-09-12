@@ -2,11 +2,16 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cmath>
+#include <limits>
+#include <memory>
 #include <vector>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PitchDetector.h"
 #include "PitchCorrector.h"
-#include "GrainVoice.h"
+#include "PhaseLockedPsolaGrainVoice.h"
 #include "FormantTilt.h"
 #include "VoiceFilter.h"
 #include "WarmSaturator.h"
@@ -24,18 +29,32 @@ class MicroDelayLine
 public:
     void prepare(double sampleRateIn)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         int size = (int) (sampleRate * 0.06) + 8;
         buf.assign((size_t) size, 0.0f);
         writePos = 0;
     }
 
+    void reset()
+    {
+        std::fill(buf.begin(), buf.end(), 0.0f);
+        writePos = 0;
+    }
+
     float process(float x, float delayMs)
     {
+        if (buf.empty())
+            return std::isfinite(x) ? x : 0.0f;
+        if (!std::isfinite(x))
+            x = 0.0f;
+
         int size = (int) buf.size();
         buf[(size_t) writePos] = x;
 
-        float delaySamples = delayMs * 0.001f * (float) sampleRate;
+        const float safeDelayMs = std::isfinite(delayMs)
+            ? juce::jlimit(0.0f, 55.0f, delayMs) : 0.0f;
+        float delaySamples = safeDelayMs * 0.001f * (float) sampleRate;
         float readPos = (float) writePos - delaySamples;
         while (readPos < 0.0f) readPos += (float) size;
 
@@ -43,7 +62,11 @@ public:
         float frac = readPos - (float) i0;
         int idx0 = i0 % size;
         int idx1 = (idx0 + 1) % size;
-        float out = buf[(size_t) idx0] + frac * (buf[(size_t) idx1] - buf[(size_t) idx0]);
+        const float sample0 = buf[(size_t) idx0];
+        const float sample1 = buf[(size_t) idx1];
+        float out = sample0 + frac * (sample1 - sample0);
+        if (!std::isfinite(out))
+            out = 0.0f;
 
         writePos = (writePos + 1) % size;
         return out;
@@ -67,13 +90,27 @@ public:
         coeff = coeffIn;
     }
 
+    void reset()
+    {
+        std::fill(buf.begin(), buf.end(), 0.0f);
+        pos = 0;
+    }
+
     float process(float in)
     {
+        if (buf.empty())
+            return std::isfinite(in) ? in : 0.0f;
+        if (!std::isfinite(in))
+            in = 0.0f;
+
         float bufOut = buf[(size_t) pos];
+        if (!std::isfinite(bufOut))
+            bufOut = 0.0f;
         float out = -in * coeff + bufOut;
-        buf[(size_t) pos] = in + bufOut * coeff;
+        const float next = in + bufOut * coeff;
+        buf[(size_t) pos] = std::isfinite(next) ? next : 0.0f;
         pos = (pos + 1) % (int) buf.size();
-        return out;
+        return std::isfinite(out) ? out : 0.0f;
     }
 
 private:
@@ -96,6 +133,12 @@ public:
         delaySamples = 0;
     }
 
+    void reset()
+    {
+        std::fill(buffer.begin(), buffer.end(), 0.0f);
+        writePosition = 0;
+    }
+
     void setDelaySamples(int samples)
     {
         delaySamples = juce::jlimit(0, (int) buffer.size() - 1, samples);
@@ -103,13 +146,17 @@ public:
 
     float process(float input)
     {
+        if (buffer.empty())
+            return std::isfinite(input) ? input : 0.0f;
+        if (!std::isfinite(input))
+            input = 0.0f;
         buffer[(size_t) writePosition] = input;
         int readPosition = writePosition - delaySamples;
         if (readPosition < 0)
             readPosition += (int) buffer.size();
         const float output = buffer[(size_t) readPosition];
         writePosition = (writePosition + 1) % (int) buffer.size();
-        return output;
+        return std::isfinite(output) ? output : 0.0f;
     }
 
 private:
@@ -126,12 +173,23 @@ class StereoSafetyLimiter
 public:
     void prepare(double sampleRate)
     {
+        if (!std::isfinite(sampleRate) || sampleRate <= 1.0)
+            sampleRate = 44100.0;
         gain = 1.0f;
         releaseCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.085));
     }
 
+    void reset() { gain = 1.0f; }
+
     void process(float& left, float& right)
     {
+        if (!std::isfinite(left) || !std::isfinite(right) || !std::isfinite(gain))
+        {
+            left = right = 0.0f;
+            gain = 1.0f;
+            return;
+        }
+
         const float peak = juce::jmax(std::abs(left), std::abs(right));
         const float target = peak > 0.985f ? 0.985f / peak : 1.0f;
         if (target < gain)
@@ -149,12 +207,16 @@ private:
 class MirrorAudioProcessor : public juce::AudioProcessor
 {
 public:
+    using juce::AudioProcessor::processBlock;
+
     MirrorAudioProcessor();
     ~MirrorAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    void reset() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -164,7 +226,10 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.1; }
+    // The longest internal tail is the two-stage ambience diffuser plus the
+    // short, click-free voice release.  Keep a little conservative headroom
+    // so an offline render cannot trim the final diffuser repeats.
+    double getTailLengthSeconds() const override { return 0.40; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -187,18 +252,67 @@ public:
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void cacheParameterPointers();
+
+    // APVTS lookup is convenient but should not happen from the real-time
+    // callback. Pointers are stable for the lifetime of the processor.
+    struct ParameterPointers
+    {
+        std::atomic<float>* rootNote = nullptr;
+        std::atomic<float>* scaleType = nullptr;
+        std::atomic<float>* vocalRange = nullptr;
+        std::atomic<float>* harmonyStyle = nullptr;
+        std::atomic<float>* tracking = nullptr;
+        std::atomic<float>* glide = nullptr;
+        std::atomic<float>* freeze = nullptr;
+        std::atomic<float>* mode = nullptr;
+        std::atomic<float>* midiVelocity = nullptr;
+        std::atomic<float>* midiVoicing = nullptr;
+        std::atomic<float>* midiInversion = nullptr;
+        std::atomic<float>* midiTiming = nullptr;
+        std::atomic<float>* dry = nullptr;
+        std::atomic<float>* dryPan = nullptr;
+        std::atomic<float>* dryFormant = nullptr;
+        std::atomic<float>* dryPitch = nullptr;
+        std::atomic<float>* dryWidth = nullptr;
+        std::atomic<float>* humanize = nullptr;
+        std::atomic<float>* character = nullptr;
+        std::atomic<float>* spread = nullptr;
+        std::atomic<float>* ambience = nullptr;
+        std::atomic<float>* harmony = nullptr;
+        std::atomic<float>* globalSaturation = nullptr;
+        std::atomic<float>* outputGain = nullptr;
+
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceEnable {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceSolo {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceInterval {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceLevel {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voicePan {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceFormant {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceFineTune {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceTone {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceSaturation {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceMicroDelay {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceVibrato {};
+        std::array<std::atomic<float>*, kNumHarmonyVoices> voiceVibratoRate {};
+    };
+    ParameterPointers parameterValues;
 
     VoiceBuffer voiceBuffer;
     PitchDetector pitchDetector;
     PitchCorrector pitchCorrector;
 
-    GrainVoice dryVoice;
+    PhaseLockedPsolaGrainVoice dryVoice;
     SampleAlignmentDelay dryAlignmentL, dryAlignmentR;
+    // Host bypass must retain the declared granular latency. Both lines are
+    // clocked during normal and bypassed processing, so toggling bypass never
+    // time-shifts the vocal or reveals a cold delay buffer.
+    SampleAlignmentDelay bypassAlignmentL, bypassAlignmentR;
     // Formant filtering needs independent state per channel; sharing one
     // filter state made an active dry formant control collapse stereo to mono.
     FormantTilt dryFormantProcL, dryFormantProcR;
 
-    std::array<GrainVoice, kNumHarmonyVoices> harmonyVoices;
+    std::array<PhaseLockedPsolaGrainVoice, kNumHarmonyVoices> harmonyVoices;
     std::array<FormantTilt, kNumHarmonyVoices> harmonyFormant;
     std::array<VoiceFilter, kNumHarmonyVoices> harmonyFilters;
     std::array<WarmSaturator, kNumHarmonyVoices> harmonySaturators;
@@ -211,6 +325,7 @@ private:
     std::array<float, kNumHarmonyVoices> voiceRatioSmoothed;
     std::array<float, kNumHarmonyVoices> voiceVibratoPhase;
     std::array<float, kNumHarmonyVoices> voiceLastMidi;
+    std::array<bool, kNumHarmonyVoices> voiceDspWasRunning {};
     int lastStableBaseMidi = 69;
     std::uint32_t lastHandledPitchRevision = 0;
 
@@ -224,11 +339,54 @@ private:
     std::array<int, kNumHarmonyVoices> midiAssignedNotes {};
     std::array<float, kNumHarmonyVoices> midiAssignedVelocities {};
     std::array<float, kNumHarmonyVoices> midiAssignedFrequencies {};
+    std::array<int, kNumHarmonyVoices> midiPendingNotes {};
+    std::array<float, kNumHarmonyVoices> midiPendingVelocities {};
+    std::array<float, kNumHarmonyVoices> midiPendingFrequencies {};
+    std::array<bool, kNumHarmonyVoices> midiPendingTargets {};
+    std::array<float, kNumHarmonyVoices> midiRetargetGains {};
+    // A voice without a previous MIDI target should begin from the chord as
+    // played, rather than being pulled toward the arbitrary initial register
+    // used to seed the voice-leading memory.
+    std::array<bool, kNumHarmonyVoices> midiVoiceHasTargets {};
+    // MIDI target assignment deliberately follows only voices that are
+    // currently audible (enabled, or soloed when any solo is active).  This
+    // avoids a muted voice silently consuming a chord tone.
+    std::array<bool, kNumHarmonyVoices> midiVoiceParticipates {};
     bool midiAssignmentsDirty = true;
     int lastMidiVoicing = -1, lastMidiInversion = -1;
+    int lastProcessingMode = -1;
+    int lastMidiTimingMode = -1;
     void removeHeldNote(int note);
-    void rebuildMidiAssignments(int midiVoicing, int midiInversion);
+    void rebuildMidiAssignments(int midiVoicing, int midiInversion,
+                                const std::array<bool, kNumHarmonyVoices>& participatingVoices);
+    void requestMidiAssignment(int voice, int note, float velocity);
     void handleMidiMessage(const juce::MidiMessage& m);
+
+    enum class QueuedMidiKind : std::uint8_t { noteOn, noteOff, sustain, allNotesOff };
+    struct QueuedMidiEvent
+    {
+        int sampleOffset = 0;
+        QueuedMidiKind kind = QueuedMidiKind::allNotesOff;
+        int data = 0;
+        float value = 0.0f;
+    };
+    static constexpr int kMaxQueuedMidiEvents = 512;
+    std::array<QueuedMidiEvent, kMaxQueuedMidiEvents> queuedMidiEvents {};
+    int queuedMidiEventCount = 0;
+    void enqueueMidiMessage(const juce::MidiMessage&, int sampleOffset);
+    void dispatchQueuedMidiEvents(int sampleOffset);
+    void advanceQueuedMidiEvents(int blockSize);
+    void handleQueuedMidiEvent(const QueuedMidiEvent&);
+
+    void resetProcessingState(bool clearMidiState);
+    void processAudioBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&, bool hostBypassed);
+    bool detectTransportDiscontinuity(int blockSize);
+    bool hasHostTransportPosition = false;
+    bool hasHostPpqPosition = false;
+    bool lastHostWasPlaying = false;
+    std::int64_t lastHostSamplePosition = 0;
+    double lastHostPpqPosition = 0.0;
+    int lastHostBlockSize = 0;
 
     float frozenLeadRatio = 1.0f;
     // Adaptive, confidence-weighted voicing fades generated material in and
@@ -236,12 +394,29 @@ private:
     float harmonyVoicing = 0.0f;
     float inputEnvelope = 0.0f;
     float voicingAttackCoeff = 0.01f, voicingReleaseCoeff = 0.001f;
+    float voicingUnvoicedReleaseCoeff = 0.004f;
+    // A separate per-voice gate gives MIDI note-offs and Enable/Solo changes
+    // a musical release instead of abruptly cutting a granular reader.
+    std::array<float, kNumHarmonyVoices> voiceRenderGains {};
+    float voiceGateAttackCoeff = 0.01f, voiceGateReleaseCoeff = 0.001f;
+    float midiRetargetFadeOutStep = 0.01f, midiRetargetFadeInStep = 0.01f;
     int reportedLatencySamples = 0;
 
     juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed, outputGainSmoothed;
-    std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceLevelSmoothed, voicePanSmoothed;
+    juce::SmoothedValue<float> dryPanGainLSmoothed, dryPanGainRSmoothed;
+    juce::SmoothedValue<float> dryPitchSemitonesSmoothed, midiVelocitySmoothed;
+    // This blend crossfades between the stereo aligned lead and the granular
+    // pitch-shifted lead. The PSOLA reader sleeps at stable zero pitch and
+    // automatically primes before this 25 ms blend becomes audible.
+    juce::SmoothedValue<float> dryPitchBlendSmoothed;
+    juce::SmoothedValue<float> hostBypassMixSmoothed;
+    juce::SmoothedValue<float> dryFormantSmoothed, ambienceSmoothed, globalSaturationSmoothed;
+    std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceLevelSmoothed, voicePanSmoothed, voiceSaturationSmoothed, voiceMicroDelaySmoothed;
+    std::array<juce::SmoothedValue<float>, kNumHarmonyVoices> voiceFormantSmoothed, voiceVibratoSmoothed, voiceVibratoRateSmoothed;
 
     double currentSampleRate = 44100.0;
+    float inputEnvelopeAttackCoeff = 0.08f;
+    float inputEnvelopeReleaseCoeff = 0.0015f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MirrorAudioProcessor)
 };

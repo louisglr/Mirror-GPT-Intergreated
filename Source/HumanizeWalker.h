@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <juce_core/juce_core.h>
 
 // Glat, langsomt varierende (filtreret random-walk) modulation - IKKE hvid
@@ -11,7 +12,8 @@ class HumanizeWalker
 public:
     void prepare(double sampleRateIn, int seed)
     {
-        sampleRate = sampleRateIn;
+        sampleRate = std::isfinite(sampleRateIn) && sampleRateIn > 1.0
+            ? sampleRateIn : 44100.0;
         random = juce::Random(seed);
         pitchVal = 0.0f; pitchTarget = 0.0f; pitchCounter = 0;
         ampVal = 0.0f; ampTarget = 0.0f; ampCounter = 0;
@@ -19,11 +21,19 @@ public:
         smoothing = 0.0f;
     }
 
+    void reset()
+    {
+        pitchVal = pitchTarget = 0.0f;
+        ampVal = ampTarget = 0.0f;
+        pitchCounter = ampCounter = 0;
+    }
+
     struct Values { float pitchCents, ampMod; };
 
     Values tick(float amount)
     {
-        const float boundedAmount = juce::jlimit(0.0f, 1.0f, amount);
+        const float boundedAmount = std::isfinite(amount)
+            ? juce::jlimit(0.0f, 1.0f, amount) : 0.0f;
         if (std::abs(boundedAmount - lastAmount) > 1.0e-6f)
         {
             const float responseMs = juce::jmap(boundedAmount, 0.0f, 1.0f, 500.0f, 120.0f);
@@ -47,13 +57,18 @@ private:
             counter = juce::jmax(1, (int) (ms * 0.001 * sampleRate));
         }
         val += (target - val) * smoothing;
+        if (!std::isfinite(val) || !std::isfinite(target))
+        {
+            val = 0.0f;
+            target = 0.0f;
+        }
         return val;
     }
 
     juce::Random random;
     double sampleRate = 44100.0;
-    float pitchVal, pitchTarget; int pitchCounter;
-    float ampVal, ampTarget; int ampCounter;
+    float pitchVal = 0.0f, pitchTarget = 0.0f; int pitchCounter = 0;
+    float ampVal = 0.0f, ampTarget = 0.0f; int ampCounter = 0;
     float lastAmount = -1.0f;
     float smoothing = 0.0f;
 };
