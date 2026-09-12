@@ -3,39 +3,60 @@
 #include <cmath>
 #include <juce_core/juce_core.h>
 
-// A sample-rate-aware three-band spectral tilt.  It is intentionally gentle:
-// upward shifts retain articulation without becoming brittle, while downward
-// shifts keep body without a boxy low-mid buildup.
+// A sample-rate-aware four-band spectral-envelope shaper. It deliberately
+// stays gentler than an LPC formant resynthesiser, but gives upward and
+// downward shifts more believable vocal weight than a single shelf tilt.
 class FormantTilt
 {
 public:
     void prepare(double sampleRateIn)
     {
         sampleRate = sampleRateIn;
-        lowCoeff = coefficientForHz(650.0f);
-        midCoeff = coefficientForHz(2800.0f);
+        lowCoeff = coefficientForHz(520.0f);
+        midCoeff = coefficientForHz(1850.0f);
+        presenceCoeff = coefficientForHz(5200.0f);
         reset();
     }
 
     void reset()
     {
-        lowState = 0.0f;
-        midState = 0.0f;
+        lowState = midState = presenceState = 0.0f;
     }
 
     float process(float x, float amount)
     {
+        if (!std::isfinite(x) || !std::isfinite(amount)
+            || !std::isfinite(lowState) || !std::isfinite(midState) || !std::isfinite(presenceState))
+        {
+            reset();
+            return 0.0f;
+        }
+
         lowState += lowCoeff * (x - lowState);
         midState += midCoeff * (x - midState);
+        presenceState += presenceCoeff * (x - presenceState);
 
         const float low = lowState;
-        const float mid = midState - lowState;
-        const float high = x - midState;
+        const float lowMid = midState - lowState;
+        const float presence = presenceState - midState;
+        const float air = x - presenceState;
         const float a = juce::jlimit(-1.0f, 1.0f, amount);
+        const float magnitude = std::abs(a);
 
-        return low * (1.0f - 0.34f * a)
-             + mid * (1.0f - 0.06f * a)
-             + high * (1.0f + 0.42f * a);
+        // Positive values brighten/de-body; negative values restore weight
+        // after an upward pitch shift. A small compensation prevents the
+        // envelope move itself from reading as a level jump.
+        const float shaped = low * (1.0f - 0.38f * a)
+                           + lowMid * (1.0f - 0.13f * a)
+                           + presence * (1.0f + 0.12f * a)
+                           + air * (1.0f + 0.46f * a);
+        const float output = shaped * (1.0f - 0.055f * magnitude);
+        if (!std::isfinite(output))
+        {
+            reset();
+            return 0.0f;
+        }
+        return output;
     }
 
 private:
@@ -45,6 +66,6 @@ private:
     }
 
     double sampleRate = 44100.0;
-    float lowCoeff = 0.08f, midCoeff = 0.32f;
-    float lowState = 0.0f, midState = 0.0f;
+    float lowCoeff = 0.08f, midCoeff = 0.32f, presenceCoeff = 0.52f;
+    float lowState = 0.0f, midState = 0.0f, presenceState = 0.0f;
 };
