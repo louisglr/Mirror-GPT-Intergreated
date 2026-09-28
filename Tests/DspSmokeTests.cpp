@@ -9,6 +9,7 @@
 #include "PitchCorrector.h"
 #include "VoiceFilter.h"
 #include "WarmSaturator.h"
+#include "MidiNoteState.h"
 
 namespace
 {
@@ -108,8 +109,61 @@ void testPitchShifter()
     const double fifth = renderPitchShift(sampleRate, 200.0f, 1.5f, 0.4f);
 
     expect(std::abs(unison - 200.0) < 0.8, "transparent unison is off pitch");
-    expect(std::abs(fine - 200.1156) < 0.8, "one-cent fine tune did not enter pitch path");
+    expect(std::abs(fine - 200.1156) < 0.04, "one-cent fine tune did not enter pitch path");
+    expect(fine - unison > 0.07, "fine tuning must measurably differ from unison");
     expect(std::abs(fifth - 300.0) < 2.0, "fractional 1.5x shift did not hold 300 Hz");
+}
+
+void testMidiOwnership()
+{
+    MidiNoteState state;
+    std::array<int, 8> notes {};
+    std::array<float, 8> velocities {};
+    const auto count = [&] { return state.collect(notes, velocities); };
+    state.noteOn(1, 60, 0.5f); state.noteOn(2, 60, 0.8f);
+    expect(count() == 1 && velocities[0] == 0.8f, "channel unison/velocity merge");
+    state.noteOff(1, 60);
+    expect(count() == 1, "channel 1 note-off released channel 2");
+    state.sustain(2, true); state.noteOff(2, 60);
+    state.sustain(1, false);
+    expect(count() == 1, "channel 1 pedal released channel 2");
+    state.sustain(2, false);
+    expect(count() == 0, "sustain release left a stuck note");
+    state.noteOn(1, 60, 1); state.noteOn(2, 64, 1);
+    state.allSoundOff(1);
+    expect(count() == 1 && notes[0] == 64, "channel panic leaked to other channels");
+    state.sustain(2, true); state.allNotesOff(2);
+    expect(count() == 1, "all-notes-off must respect sustain");
+    state.allSoundOff(2);
+    expect(count() == 0, "all-sound-off must ignore sustain");
+    state.reset();
+    for (int n = 60; n < 72; ++n) state.noteOn(1, n, 0.5f);
+    expect(count() == 8, "voice palette must stay bounded");
+    state.noteOff(1, 60);
+    expect(count() == 8 && notes[0] == 61 && notes[7] == 68, "held overflow notes were lost");
+    state.reset(); state.noteOn(1, 60, 1); state.noteOn(1, 60, 1); state.noteOff(1, 60);
+    expect(count() == 0, "same-channel retrigger left a stuck note");
+}
+
+void testInterpolationBoundary()
+{
+    VoiceBuffer buffer;
+    buffer.prepare(48000.0, 0.1f);
+    for (int i = 0; i < 2048; ++i)
+        buffer.write(0.5f * std::sin((float)i * 1.7f) + 0.2f * std::cos((float)i * 2.4f));
+    float legacyJump = 0, refinedJump = 0;
+    for (int i = 100; i < 300; ++i)
+    {
+        const double pos = (double)i + 0.37;
+        legacyJump = juce::jmax(legacyJump, std::abs(buffer.readBandLimited(pos, 1.074999f, 0)
+                                                    - buffer.readBandLimited(pos, 1.075001f, 0)));
+        refinedJump = juce::jmax(refinedJump, std::abs(buffer.readBandLimited(pos, 1.074999f, 1)
+                                                      - buffer.readBandLimited(pos, 1.075001f, 1)));
+        expect(buffer.readBandLimited(pos, 1.0f, 1) == buffer.readInterpolated(pos), "refined unison changed");
+        expect(buffer.readBandLimited(pos, 1.5f, 1) == buffer.readBandLimited(pos, 1.5f, 0), "refinement altered far shifts");
+    }
+    expect(legacyJump > 1.0e-3f, "boundary stimulus failed to expose the original discontinuity");
+    expect(refinedJump < 1.0e-4f, "refined interpolation is discontinuous at 1.075");
 }
 
 void testSaturatorAndReset()
@@ -253,6 +307,8 @@ int main()
     testPitchDetector(96000.0);
     testPitchDetector(192000.0);
     testPitchShifter();
+    testMidiOwnership();
+    testInterpolationBoundary();
     testSaturatorAndReset();
     testDefensiveRecovery();
 

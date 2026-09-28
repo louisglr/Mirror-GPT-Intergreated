@@ -4,8 +4,9 @@
 #include <memory>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
+#include "MirrorLookAndFeel.h"
 
-class MirrorAudioProcessorEditor : public juce::AudioProcessorEditor
+class MirrorAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit MirrorAudioProcessorEditor(MirrorAudioProcessor&);
@@ -15,6 +16,16 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+    void configureValueDisplay(juce::Slider&, const juce::String& parameterId);
+    MirrorLookAndFeel theme;
+    juce::TooltipWindow tooltips { this, 650 };
+    juce::Label statusLabel, pageHintLabel, mixHintLabel;
+    juce::TextButton helpButton { "?" };
+    juce::ComboBox engineQualityBox;
+    juce::Label engineQualityLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> engineQualityAttachment;
+    std::array<float, kNumHarmonyVoices> displayLevels {};
     struct KnobWithLabel
     {
         juce::Slider slider;

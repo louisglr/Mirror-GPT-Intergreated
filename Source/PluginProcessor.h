@@ -17,6 +17,7 @@
 #include "WarmSaturator.h"
 #include "HumanizeWalker.h"
 #include "MusicalIntervals.h"
+#include "MidiNoteState.h"
 
 static constexpr int kNumHarmonyVoices = 4;
 static constexpr int kMaxHeldNotes = 8;
@@ -280,6 +281,8 @@ private:
         std::atomic<float>* spread = nullptr;
         std::atomic<float>* ambience = nullptr;
         std::atomic<float>* harmony = nullptr;
+        std::atomic<float>* harmonyMix = nullptr;
+        std::atomic<float>* engineQuality = nullptr;
         std::atomic<float>* globalSaturation = nullptr;
         std::atomic<float>* outputGain = nullptr;
 
@@ -333,9 +336,8 @@ private:
 
     std::array<int, kMaxHeldNotes> heldNotes {};
     std::array<float, kMaxHeldNotes> heldNoteVelocities {};
-    std::array<bool, 128> physicalKeys {};
+    MidiNoteState midiNoteState;
     int numHeldNotes = 0;
-    bool sustainPedalDown = false;
     std::array<int, kNumHarmonyVoices> midiAssignedNotes {};
     std::array<float, kNumHarmonyVoices> midiAssignedVelocities {};
     std::array<float, kNumHarmonyVoices> midiAssignedFrequencies {};
@@ -362,10 +364,11 @@ private:
     void requestMidiAssignment(int voice, int note, float velocity);
     void handleMidiMessage(const juce::MidiMessage& m);
 
-    enum class QueuedMidiKind : std::uint8_t { noteOn, noteOff, sustain, allNotesOff };
+    enum class QueuedMidiKind : std::uint8_t { noteOn, noteOff, sustain, allNotesOff, allSoundOff, resetControllers };
     struct QueuedMidiEvent
     {
         int sampleOffset = 0;
+        int channel = 1;
         QueuedMidiKind kind = QueuedMidiKind::allNotesOff;
         int data = 0;
         float value = 0.0f;
@@ -377,6 +380,7 @@ private:
     void dispatchQueuedMidiEvents(int sampleOffset);
     void advanceQueuedMidiEvents(int blockSize);
     void handleQueuedMidiEvent(const QueuedMidiEvent&);
+    static bool decodeMidiMessage(const juce::MidiMessage&, QueuedMidiEvent&);
 
     void resetProcessingState(bool clearMidiState);
     void processAudioBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&, bool hostBypassed);
@@ -403,6 +407,7 @@ private:
     int reportedLatencySamples = 0;
 
     juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed, outputGainSmoothed;
+    juce::SmoothedValue<float> engineRefinementSmoothed;
     juce::SmoothedValue<float> dryPanGainLSmoothed, dryPanGainRSmoothed;
     juce::SmoothedValue<float> dryPitchSemitonesSmoothed, midiVelocitySmoothed;
     // This blend crossfades between the stereo aligned lead and the granular

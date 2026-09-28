@@ -133,7 +133,7 @@ public:
         activationGain = 0.0f;
     }
 
-    float process(const VoiceBuffer& vb, float pitchRatio, float sourceFrequency)
+    float process(const VoiceBuffer& vb, float pitchRatio, float sourceFrequency, float refinement = 0.0f)
     {
         if (!prepared)
             return 0.0f;
@@ -187,7 +187,7 @@ public:
             if (age[i] == 0 && !needsPrime)
                 startGrain(i, vb, writeHead, safeRatio, period);
 
-            const float sample = vb.readBandLimited(pos[i], safeRatio);
+            const float sample = vb.readBandLimited(pos[i], safeRatio, refinement);
             const float envelope = window(age[i]);
             sum += sample * envelope;
             windowSum += envelope;

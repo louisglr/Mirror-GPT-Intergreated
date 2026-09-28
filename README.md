@@ -1,4 +1,29 @@
-# MIЯЯOЯ — v1.5.0 Release Candidate
+# MIЯЯOЯ — v1.6.0 development candidate
+
+**Not a commercial release. Build and listening acceptance remain pending.**
+
+This candidate adds a live vector UI, persistent Harmony Mix / Output,
+channel-aware MIDI ownership, optional refined interpolation and full-processor
+regression tests. Read [RELEASE_STATUS.md](RELEASE_STATUS.md) for exact scope,
+verification status and remaining release gates. [QUICK_START.md](QUICK_START.md)
+documents the new workflow; the v1.5 notes below describe the retained foundation.
+
+Harmony Mix is now an independent, smoothed 0–100% harmony-bus level, not a
+dry/wet crossfade. The ignored old `harmony` parameter is retained for session
+compatibility. Old sessions restore the new mix at 100% and the Original engine.
+Presets preserve the new mix and master Output.
+
+The actual JUCE editor is 840 × 640; tests can capture all four UI states with:
+
+```sh
+"build/MirrorIntegrationTests_artefacts/Release/MIRROR Integration Tests" "$PWD/ui-snapshots"
+```
+
+The commercial packaging script is deliberately separate from evaluation CI:
+see `scripts/package-macos.sh`. It requires approved legal documents, successful
+tests, real Developer ID identities and a configured notarisation profile.
+
+## Retained v1.5 foundation
 
 MIЯЯOЯ is a four-voice vocal harmonizer for macOS. It combines scale-aware
 Manual harmonies with playable MIDI harmony, per-voice tone shaping and a
@@ -62,7 +87,8 @@ is not the final signed commercial installer.
   never changed by a preset.
 - The preset field honestly shows **SELECT / CUSTOM** after manual edits or a
   restored session. MIDI controls and Output Gain are exposed in the UI;
-  Tracking, Transition and Harmony are visibly locked to the DSP's 100% path.
+  Tracking and Transition remain fixed internally. Their dead UI controls are
+  hidden in v1.6; the newly added Harmony Mix is active and independent.
 
 ## Build locally
 

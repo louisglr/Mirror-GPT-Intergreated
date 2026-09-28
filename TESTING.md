@@ -1,4 +1,4 @@
-# MIЯЯOЯ v1.5.0-rc1 — listening, MIDI and stability test
+# MIЯЯOЯ v1.6.0 candidate — listening, MIDI and stability test
 
 Do not replace a known-good production build until this checklist passes. Start
 with a clean Logic project at 48 kHz / 64 samples, then repeat the marked tests
@@ -11,7 +11,23 @@ at 44.1 and 96 kHz.
 - Confirm the `MirrorDspSmoke` test passes across 22.05, 24, 29.4, 44.1, 48,
   96 and 192 kHz, including the saturation reference and invalid-state tests.
 - Validate the MIDI-controlled Audio Unit with `auval -v aumf MIRR LGRL`.
-- Open AU and VST3 once and confirm the 700 × 520 editor renders.
+- Confirm `MirrorIntegration` passes state migration, master-mix isolation,
+  Live/Aligned channel ownership, bypass PDC, automation and UI checks.
+- Open AU and VST3 once and confirm the 840 × 640 editor renders.
+- Inspect actual `ui-snapshots/` from the integration executable, not a mockup.
+- Test at both normal and Retina/DAW-scaled display sizes.
+
+## New release-candidate checks
+
+- Mix=0 removes harmonies AND their ambience, but not the lead. Mix=100 restores
+  the original balance. Output and Mix remain accessible on both pages.
+- Save with Mix=42%, close/reopen: 42% must return. Load a v1.5 state into that
+  same instance: Mix=100 and Pitch Engine=Original must return.
+- Preset selection must preserve Key, Scale, Mode, Mix and master Output.
+- On two MIDI channels, hold the same note and release just one. The other
+  must remain. Repeat with separate sustain pedals and channel-specific panic.
+- Refined: sweep through the 1.075 pitch ratio with bright input. Compare to
+  Original; do not claim sonic improvement from the mathematical check alone.
 
 ## 2. Five-minute functional check
 

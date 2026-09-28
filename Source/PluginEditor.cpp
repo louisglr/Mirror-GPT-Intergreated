@@ -3,12 +3,12 @@
 
 namespace
 {
-    juce::Colour kBg1 { 0xff211a17 };
-    juce::Colour kBg2 { 0xff0b0908 };
-    juce::Colour kAccent { 0xffd4bd8a };
-    juce::Colour kAccentDim { 0xff8c7555 };
-    juce::Colour kText { 0xfff2eadb };
-    juce::Colour kTextDim { 0xffb3a58e };
+    juce::Colour kBg1 { 0xff101211 };
+    juce::Colour kBg2 { 0xff161a16 };
+    juce::Colour kAccent { 0xffcfb991 };
+    juce::Colour kAccentDim { 0xffbba783 };
+    juce::Colour kText { 0xffefece3 };
+    juce::Colour kTextDim { 0xffaaa99e };
 
     constexpr int kPresetCustomId = 1;
     constexpr int kFirstPresetId = 2;
@@ -19,13 +19,22 @@ namespace
 MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p)
 {
+    setLookAndFeel(&theme);
+    engineQualityBox.addItemList({ "Original", "Refined" }, 1);
+    engineQualityBox.setTooltip("Original preserves the v1.5 pitch interpolation. Refined smooths the transition between interpolation filters. Old sessions load Original automatically.");
+    addAndMakeVisible(engineQualityBox);
+    engineQualityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "engineQuality", engineQualityBox);
+    engineQualityLabel.setText("PITCH ENGINE", juce::dontSendNotification);
+    engineQualityLabel.setColour(juce::Label::textColourId, kTextDim);
+    engineQualityLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(engineQualityLabel);
     // U+042F is the Cyrillic capital Ya: the actual mirrored-R glyph used in
     // the wordmark, not a fragile font trick. Times New Roman has the glyph on
     // macOS; the fallbacks keep the logo legible if a host substitutes fonts.
     titleLabel.setText(juce::String::fromUTF8(u8"MIЯЯOЯ"), juce::dontSendNotification);
     titleLabel.setJustificationType(juce::Justification::centredLeft);
     titleLabel.setColour(juce::Label::textColourId, kText);
-    auto wordmarkFont = juce::Font(juce::FontOptions("Times New Roman", 22.0f, juce::Font::plain));
+    auto wordmarkFont = juce::Font(juce::FontOptions("Times New Roman", 32.0f, juce::Font::plain));
     juce::StringArray wordmarkFallbacks;
     wordmarkFallbacks.add("Georgia");
     wordmarkFallbacks.add("Arial Unicode MS");
@@ -58,6 +67,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     addAndMakeVisible(harmonyPageButton);
 
     modeBox.addItemList({ "Manual", "MIDI" }, 1);
+    modeBox.setComponentID("mode");
     addAndMakeVisible(modeBox);
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "mode", modeBox);
@@ -92,6 +102,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     // collection of parameters, while a restored DAW session should never
     // pretend to know which name the user last chose.
     presetBox.addItem("SELECT / CUSTOM", kPresetCustomId);
+    presetBox.setComponentID("preset");
     presetBox.addSeparator();
     presetBox.addItem("Glass Bloom", kFirstPresetId);
     presetBox.addItem("Fractured Light", kFirstPresetId + 1);
@@ -116,6 +127,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     addAndMakeVisible(inputSectionLabel);
 
     rootBox.addItemList({ "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 1);
+    rootBox.setComponentID("rootNote");
     addAndMakeVisible(rootBox);
     rootAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "rootNote", rootBox);
@@ -124,6 +136,7 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     addAndMakeVisible(rootLabel);
 
     scaleBox.addItemList({ "Chromatic", "Major", "Minor" }, 1);
+    scaleBox.setComponentID("scaleType");
     addAndMakeVisible(scaleBox);
     scaleAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "scaleType", scaleBox);
@@ -234,19 +247,52 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     mixSectionLabel.setColour(juce::Label::textColourId, kAccentDim);
     mixSectionLabel.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
     addAndMakeVisible(mixSectionLabel);
-    setupKnob(harmonyMixKnob, "harmony", "HARMONY");
-    lockKnob(harmonyMixKnob, "HARMONY · 100%", "Harmony Mix is fixed at 100% for MIRROR's coherent output path.");
+    setupKnob(harmonyMixKnob, "harmonyMix", "HARMONY MIX");
+    harmonyMixKnob.slider.setSliderStyle(juce::Slider::LinearHorizontal);
+    harmonyMixKnob.slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 26);
+    harmonyMixKnob.slider.setTooltip("One level for all four harmonies, including their ambience. Lead level stays unchanged. 100% preserves the original balance.");
     setupKnob(globalSaturationKnob, "globalSaturation", "GLUE");
     setupKnob(outputGainKnob, "outputGain", "OUTPUT");
     outputGainKnob.slider.setTooltip("Final output trim after colour, before the safety limiter.");
 
-    setSize(700, 520);
+    statusLabel.setColour(juce::Label::textColourId, kTextDim);
+    statusLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addAndMakeVisible(statusLabel);
+    pageHintLabel.setColour(juce::Label::textColourId, kTextDim);
+    pageHintLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addAndMakeVisible(pageHintLabel);
+    mixHintLabel.setText("All four voices. Your lead stays unchanged.", juce::dontSendNotification);
+    mixHintLabel.setColour(juce::Label::textColourId, kTextDim);
+    mixHintLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addAndMakeVisible(mixHintLabel);
+    helpButton.setTooltip("Quick start and keyboard controls");
+    helpButton.onClick = [this]
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "MIRROR · Quick start",
+            "MANUAL: choose Key / Scale, then intervals on the Voices page.\n"
+            "MIDI: route MIDI notes from your DAW to MIRROR. Key / Scale do not set played MIDI notes.\n\n"
+            "HARMONY MIX controls all generated voices together, without turning down the lead. "
+            "Use Lead Level for harmonies-only processing.\n\n"
+            "ADVANCED reveals each voice's tone, colour, timing and modulation. "
+            "Formant is gentle tone shaping, not independent formant resynthesis.\n\n"
+            "Double-click a control to reset it. Drag for continuous adjustment or click its value to type. "
+            "Tab selects controls; arrow keys adjust sliders. Hover for help.\n\n"
+            "Development candidate · 1.6.0 · Not a signed commercial release.",
+            "Got it", this);
+    };
+    addAndMakeVisible(helpButton);
+    setSize(840, 640);
+    startTimerHz(20);
 
     mainPageButton.setToggleState(true, juce::dontSendNotification);
     showPage(0);
 }
 
-MirrorAudioProcessorEditor::~MirrorAudioProcessorEditor() {}
+MirrorAudioProcessorEditor::~MirrorAudioProcessorEditor()
+{
+    stopTimer();
+    setLookAndFeel(nullptr);
+}
 
 void MirrorAudioProcessorEditor::setupKnob(KnobWithLabel& k, const juce::String& paramId, const juce::String& labelText)
 {
@@ -269,6 +315,7 @@ void MirrorAudioProcessorEditor::setupKnob(KnobWithLabel& k, const juce::String&
 
     k.attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, paramId, k.slider);
+    configureValueDisplay(k.slider, paramId);
 }
 
 void MirrorAudioProcessorEditor::lockKnob(KnobWithLabel& k, const juce::String& lockedLabel,
@@ -304,7 +351,7 @@ void MirrorAudioProcessorEditor::updateModeDependentControls()
 {
     const bool showMain = currentPage == 0;
     const bool isMidi = modeBox.getSelectedId() == kMidiModeItemId;
-    const bool showManualInput = showMain && !isMidi;
+    const bool showManualInput = !isMidi;
     const bool showMidiInput = showMain && isMidi;
 
     // Key/Scale are deliberately preserved when a preset changes, but MIDI
@@ -313,11 +360,11 @@ void MirrorAudioProcessorEditor::updateModeDependentControls()
     rootLabel.setVisible(showManualInput);
     scaleBox.setVisible(showManualInput);
     scaleLabel.setVisible(showManualInput);
-    trackingKnob.slider.setVisible(showManualInput);
-    trackingKnob.label.setVisible(showManualInput);
-    glideKnob.slider.setVisible(showManualInput);
-    glideKnob.label.setVisible(showManualInput);
-    freezeButton.setVisible(showManualInput);
+    trackingKnob.slider.setVisible(false);
+    trackingKnob.label.setVisible(false);
+    glideKnob.slider.setVisible(false);
+    glideKnob.label.setVisible(false);
+    freezeButton.setVisible(showMain && !isMidi);
     freezeButton.setEnabled(showManualInput);
 
     midiVelocityKnob.slider.setVisible(showMidiInput);
@@ -329,7 +376,17 @@ void MirrorAudioProcessorEditor::updateModeDependentControls()
     midiTimingBox.setVisible(showMidiInput);
     midiTimingLabel.setVisible(showMidiInput);
 
-    inputSectionLabel.setText(isMidi ? "MIDI HARMONY" : "INPUT", juce::dontSendNotification);
+
+    inputSectionLabel.setVisible(false);
+    for (auto& voice : voiceColumns)
+    {
+        voice.intervalBox.setEnabled(!isMidi);
+        voice.intervalBox.setTooltip(isMidi ? "In MIDI mode, played notes set the harmonies." : "Harmony interval relative to the lead and selected scale.");
+    }
+    pageHintLabel.setText(currentPage == 0
+        ? "Shape the lead, build the ensemble, then blend."
+        : (isMidi ? "MIDI notes set the harmony. Shape each voice below." : "Choose intervals, balance the voices, then explore Advanced."),
+        juce::dontSendNotification);
 }
 
 void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& c, int voiceIndex)
@@ -359,6 +416,7 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& c, int voiceIndex
     c.soloButton.onClick = [this] { markPresetAsCustom(); };
 
     c.intervalBox.addItemList(getIntervalNames(), 1);
+    c.intervalBox.setComponentID("voiceInterval" + idx);
     addAndMakeVisible(c.intervalBox);
     c.intervalAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "voiceInterval" + idx, c.intervalBox);
@@ -375,7 +433,7 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& c, int voiceIndex
         lbl.setText(text, juce::dontSendNotification);
         lbl.setJustificationType(juce::Justification::centred);
         lbl.setColour(juce::Label::textColourId, kTextDim);
-        lbl.setFont(juce::Font(juce::FontOptions(8.5f, juce::Font::plain)));
+        lbl.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::plain)));
         addAndMakeVisible(lbl);
 
         s.onValueChange = [this] { markPresetAsCustom(); };
@@ -410,6 +468,15 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& c, int voiceIndex
         audioProcessor.apvts, "voiceVibrato" + idx, c.vibratoSlider);
     c.vibratoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "voiceVibratoRate" + idx, c.vibratoRateSlider);
+    configureValueDisplay(c.levelSlider, "voiceLevel" + idx);
+    configureValueDisplay(c.panSlider, "voicePan" + idx);
+    configureValueDisplay(c.formantSlider, "voiceFormant" + idx);
+    configureValueDisplay(c.fineTuneSlider, "voiceFineTune" + idx);
+    configureValueDisplay(c.toneSlider, "voiceTone" + idx);
+    configureValueDisplay(c.saturationSlider, "voiceSaturation" + idx);
+    configureValueDisplay(c.microDelaySlider, "voiceMicroDelay" + idx);
+    configureValueDisplay(c.vibratoSlider, "voiceVibrato" + idx);
+    configureValueDisplay(c.vibratoRateSlider, "voiceVibratoRate" + idx);
 }
 
 void MirrorAudioProcessorEditor::showPage(int pageIndex)
@@ -461,8 +528,19 @@ void MirrorAudioProcessorEditor::showPage(int pageIndex)
         c.vibratoRateSlider.setVisible(showHarmony && showAdvanced); c.vibratoRateLabel.setVisible(showHarmony && showAdvanced);
     }
 
+
+    // Navigation, musical context and master balance never disappear.
+    modeBox.setVisible(true); modeLabel.setVisible(true);
+    harmonyMixKnob.slider.setVisible(true); harmonyMixKnob.label.setVisible(true);
+    outputGainKnob.slider.setVisible(true); outputGainKnob.label.setVisible(true);
+    mixSectionLabel.setVisible(false);
+    engineQualityBox.setVisible(showMain);
+    engineQualityLabel.setVisible(showMain);
+    mainPageButton.setToggleState(showMain, juce::dontSendNotification);
+    harmonyPageButton.setToggleState(showHarmony, juce::dontSendNotification);
     updateModeDependentControls();
     resized();
+    repaint();
 }
 
 void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
@@ -473,12 +551,20 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
     auto set = [&](const juce::String& id, float value)
     {
         if (auto* p = apvts.getParameter(id))
+        {
+            p->beginChangeGesture();
             p->setValueNotifyingHost(p->convertTo0to1(value));
+            p->endChangeGesture();
+        }
     };
     auto setChoice = [&](const juce::String& id, int choiceIndex, int numChoices)
     {
         if (auto* p = apvts.getParameter(id))
+        {
+            p->beginChangeGesture();
             p->setValueNotifyingHost((float) choiceIndex / (float) juce::jmax(1, numChoices - 1));
+            p->endChangeGesture();
+        }
     };
     auto voice = [&](int i, bool enable, int intervalIdx, float level, float pan)
     {
@@ -517,7 +603,7 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
     // and the MIDI routing choices deliberately remain untouched: they are live
     // musical context, not a hidden part of a named texture.
     set("dryPan", 0.0f); set("dryFormant", 0.0f); set("dryPitch", 0.0f); set("dryWidth", 0.5f);
-    set("midiVelocity", 0.0f); set("globalSaturation", 0.04f); set("outputGain", 0.0f);
+    set("midiVelocity", 0.0f); set("globalSaturation", 0.04f); // Preserve master Output / Harmony Mix.
     // These three legacy controls are deliberately fixed at unity in the DSP
     // for a coherent, tight default. Keep preset/UI state honest as well.
     set("harmony", 1.0f); set("tracking", 1.0f); set("glide", 1.0f);
@@ -564,199 +650,214 @@ void MirrorAudioProcessorEditor::applyPreset(int presetIndex)
     }
 }
 
+void MirrorAudioProcessorEditor::configureValueDisplay(juce::Slider& slider, const juce::String& id)
+{
+    slider.setComponentID(id);
+    slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.25f,
+                               juce::MathConstants<float>::pi * 2.75f, true);
+    slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 17);
+    slider.setWantsKeyboardFocus(true);
+    slider.setScrollWheelEnabled(false); // Trackpad navigation must not change a mix.
+    if (auto* parameter = audioProcessor.apvts.getParameter(id))
+    {
+        slider.setTitle(parameter->getName(100));
+        slider.setDoubleClickReturnValue(true, parameter->convertFrom0to1(parameter->getDefaultValue()));
+    }
+    const bool level = id == "dry" || id.startsWith("voiceLevel");
+    const bool pan = id == "dryPan" || id.startsWith("voicePan");
+    const bool cents = id.startsWith("voiceFineTune");
+    const bool pitch = id == "dryPitch";
+    const bool delay = id.startsWith("voiceMicroDelay");
+    const bool rate = id.startsWith("voiceVibratoRate");
+    const bool width = id == "dryWidth";
+    const bool db = id == "outputGain";
+    const bool bipolar = slider.getMinimum() < 0 && !pan && !pitch && !cents && !db;
+    const int voiceIndex = rate ? juce::jmax(0, id.getTrailingIntValue()-1) : 0;
+    if (width) slider.getProperties().set("centre", 0.5f);
+    slider.textFromValueFunction = [=](double value) -> juce::String
+    {
+        if (level) return value <= 0 ? "Off" : juce::String(juce::Decibels::gainToDecibels(value), 1) + " dB";
+        if (db) return juce::String(value, 1) + " dB";
+        if (pan) return std::abs(value) < 0.005 ? "Centre" : juce::String(value < 0 ? "L " : "R ") + juce::String(juce::roundToInt(std::abs(value)*100));
+        if (cents) return juce::String(value > 0 ? "+" : "") + juce::String(value, 1) + " ct";
+        if (pitch) return juce::String(value > 0 ? "+" : "") + juce::String(value, 1) + " st";
+        if (delay) return juce::String(value, 1) + " ms";
+        if (rate) return juce::String(3.0 + 4.2*value + voiceIndex*0.12, 1) + " Hz";
+        return juce::String(bipolar && value > 0 ? "+" : "") + juce::String(juce::roundToInt(value*(width ? 200 : 100))) + "%";
+    };
+    slider.valueFromTextFunction = [=](const juce::String& text) -> double
+    {
+        const auto cleaned = text.trim();
+        const double number = cleaned.retainCharacters("0123456789.-+").getDoubleValue();
+        if (level) return cleaned.equalsIgnoreCase("Off") ? 0.0 : juce::Decibels::decibelsToGain(number);
+        if (pan) return cleaned.equalsIgnoreCase("Centre") ? 0.0 : number*(cleaned.startsWithIgnoreCase("L") ? -0.01 : 0.01);
+        if (rate) return (number - 3.0 - voiceIndex*0.12) / 4.2;
+        if (db || cents || pitch || delay) return number;
+        return number / (width ? 200.0 : 100.0);
+    };
+    juce::String help = "Drag to adjust. Double-click to restore the default. Click the value to type.";
+    if (id.containsIgnoreCase("formant")) help = "Gentle vocal body / brightness shaping. Not independent formant resynthesis. " + help;
+    if (id.containsIgnoreCase("tone")) help = "Higher values darken and filter the harmony so the lead stays clear. " + help;
+    if (delay) help = "Fixed micro-delay for this voice, in milliseconds. " + help;
+    if (id == "globalSaturation") help = "Subtle saturation on the complete output, including the lead. " + help;
+    slider.setTooltip(help);
+    slider.updateText();
+}
+
+void MirrorAudioProcessorEditor::timerCallback()
+{
+    const bool midi = modeBox.getSelectedId() == kMidiModeItemId;
+    const float confidence = audioProcessor.currentConfidence.load(std::memory_order_relaxed);
+    const int notes = audioProcessor.currentHeldNoteCount.load(std::memory_order_relaxed);
+    statusLabel.setText(midi ? ("MIDI · " + juce::String(notes) + (notes == 1 ? " note" : " notes"))
+                            : (confidence > 0.45f ? "MANUAL · Vocal detected" : "MANUAL · Ready for a vocal"),
+                        juce::dontSendNotification);
+    for (size_t i = 0; i < displayLevels.size(); ++i)
+        displayLevels[i] = juce::jmax(displayLevels[i] * 0.78f,
+            audioProcessor.currentVoiceVisualLevels[i].load(std::memory_order_relaxed));
+    repaint();
+}
+
 void MirrorAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    juce::ColourGradient grad(kBg1, 0, 0, kBg2, 0, (float) getHeight(), false);
-    g.setGradientFill(grad);
+    g.setGradientFill(juce::ColourGradient(kBg1, 0, 0, kBg2, 840, 640, false));
     g.fillAll();
+    g.setColour(kAccent.withAlpha(0.16f));
+    g.drawHorizontalLine(80, 24, 816);
+    auto card = [&](juce::Rectangle<float> r)
+    {
+        g.setColour(juce::Colours::black.withAlpha(0.25f));
+        g.fillRoundedRectangle(r.translated(0, 3), 12);
+        g.setColour(theme.panel);
+        g.fillRoundedRectangle(r, 12);
+        g.setColour(kAccent.withAlpha(0.14f));
+        g.drawRoundedRectangle(r.reduced(0.5f), 12, 1);
+    };
+    if (currentPage == 0)
+    {
+        card({24, 174, 244, 340});
+        card({280, 174, 292, 340});
+        card({584, 174, 232, 340});
+        // Four restrained level strips, never a decorative circle obscuring controls.
+        for (int i = 0; i < kNumHarmonyVoices; ++i)
+        {
+            const float x = 301.0f + (float)i*64;
+            g.setColour(kAccent.withAlpha(0.10f));
+            g.fillRoundedRectangle(x, 474, 52, 5, 2);
+            g.setColour(kAccent.withAlpha(0.85f));
+            g.fillRoundedRectangle(x, 474, 52*juce::jlimit(0.0f, 1.0f, displayLevels[(size_t)i]), 5, 2);
+            g.setFont(juce::Font(juce::FontOptions(10.0f)));
+            g.setColour(kTextDim);
+            g.drawText("VOICE " + juce::String(i+1), (int)x, 484, 54, 16, juce::Justification::centred);
+        }
+    }
+    else
+    {
+        for (int i = 0; i < kNumHarmonyVoices; ++i)
+        {
+            card({24.0f + (float)i*201, 174, 189, 340});
+            g.setColour(kAccent.withAlpha(0.14f));
+            g.fillRoundedRectangle(40.0f + (float)i*201, 502, 157, 3, 1);
+            g.setColour(kAccent);
+            g.fillRoundedRectangle(40.0f + (float)i*201, 502, 157*displayLevels[(size_t)i], 3, 1);
+        }
+    }
+    card({24, 528, 792, 88});
 }
 
 void MirrorAudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds().reduced(16);
-
-    auto headerRow = area.removeFromTop(38);
-    auto titleArea = headerRow.removeFromLeft(180);
-    titleLabel.setBounds(titleArea.removeFromTop(24));
-    creditLabel.setBounds(titleArea);
-
-    mainPageButton.setBounds(headerRow.removeFromLeft(70).reduced(2, 4));
-    harmonyPageButton.setBounds(headerRow.removeFromLeft(90).reduced(2, 4));
-    headerRow.removeFromLeft(10);
-    presetLabel.setBounds(headerRow.removeFromLeft(48));
-    presetBox.setBounds(headerRow.removeFromLeft(140).reduced(2, 6));
-
-    area.removeFromTop(8);
-
+    titleLabel.setBounds(24, 15, 230, 42);
+    creditLabel.setBounds(27, 55, 210, 16);
+    presetLabel.setBounds(297, 17, 60, 15);
+    presetBox.setBounds(300, 37, 238, 30);
+    modeLabel.setBounds(562, 17, 90, 15);
+    modeBox.setBounds(564, 37, 192, 30);
+    helpButton.setBounds(784, 37, 32, 30);
+    mainPageButton.setBounds(24, 99, 112, 32);
+    harmonyPageButton.setBounds(142, 99, 126, 32);
+    rootLabel.setBounds(301, 86, 60, 14);
+    rootBox.setBounds(300, 104, 90, 28);
+    scaleLabel.setBounds(405, 86, 80, 14);
+    scaleBox.setBounds(404, 104, 134, 28);
+    statusLabel.setBounds(558, 104, 256, 26);
+    pageHintLabel.setBounds(25, 142, currentPage == 0 ? 760 : 594, 20);
+    advancedButton.setBounds(674, 140, 142, 26);
+    harmonySectionLabel.setBounds(0, 0, 0, 0);
+    harmonyMixKnob.label.setBounds(42, 541, 158, 16);
+    harmonyMixKnob.label.setJustificationType(juce::Justification::centredLeft);
+    mixHintLabel.setBounds(42, 590, 534, 16);
+    harmonyMixKnob.slider.setBounds(40, 558, 624, 30);
+    outputGainKnob.label.setBounds(712, 540, 82, 16);
+    outputGainKnob.slider.setBounds(710, 555, 86, 57);
+    auto knob = [](KnobWithLabel& k, juce::Rectangle<int> r)
+    {
+        k.label.setBounds(r.removeFromTop(16));
+        k.slider.setBounds(r);
+    };
+    auto small = [](juce::Slider& slider, juce::Label& label, juce::Rectangle<int> r)
+    {
+        label.setBounds(r.removeFromTop(14));
+        slider.setBounds(r);
+    };
     if (currentPage == 0)
     {
-        const bool isMidi = modeBox.getSelectedId() == kMidiModeItemId;
-        auto modeRow = area.removeFromTop(48);
-        auto modeCol = modeRow.removeFromLeft(modeRow.getWidth() / 3).reduced(4);
-        modeLabel.setBounds(modeCol.removeFromTop(13));
-        modeBox.setBounds(modeCol.removeFromTop(24));
-        auto vocalRangeCol = modeRow.removeFromLeft(modeRow.getWidth() / 2).reduced(4);
-        vocalRangeLabel.setBounds(vocalRangeCol.removeFromTop(13));
-        vocalRangeBox.setBounds(vocalRangeCol.removeFromTop(24));
-        auto styleCol = modeRow.reduced(4);
-        harmonyStyleLabel.setBounds(styleCol.removeFromTop(13));
-        harmonyStyleBox.setBounds(styleCol.removeFromTop(24));
-
-        area.removeFromTop(6);
-        inputSectionLabel.setBounds(area.removeFromTop(14));
-        auto inputRow = area.removeFromTop(58);
-        if (!isMidi)
+        drySectionLabel.setText("01  /  LEAD", juce::dontSendNotification);
+        drySectionLabel.setBounds(40, 190, 210, 22);
+        knob(dryLevelKnob, {43, 228, 92, 103});
+        knob(dryPanKnob, {155, 228, 92, 103});
+        knob(dryPitchKnob, {36, 358, 70, 91});
+        knob(dryFormantKnob, {110, 358, 78, 91});
+        knob(dryWidthKnob, {192, 358, 66, 91});
+        freezeButton.setBounds(44, 470, 182, 24);
+        characterSectionLabel.setText("02  /  ENSEMBLE", juce::dontSendNotification);
+        characterSectionLabel.setBounds(298, 190, 250, 22);
+        knob(humanizeKnob, {296, 228, 83, 103});
+        knob(characterKnob, {383, 228, 83, 103});
+        knob(spreadKnob, {470, 228, 83, 103});
+        vocalRangeLabel.setBounds(300, 356, 112, 16);
+        vocalRangeBox.setBounds(300, 378, 112, 28);
+        harmonyStyleLabel.setBounds(430, 356, 120, 16);
+        harmonyStyleBox.setBounds(430, 378, 120, 28);
+        engineQualityLabel.setBounds(300, 417, 110, 24);
+        engineQualityBox.setBounds(430, 416, 120, 28);
+        ambienceSectionLabel.setText("03  /  SPACE & COLOUR", juce::dontSendNotification);
+        ambienceSectionLabel.setBounds(602, 190, 198, 22);
+        knob(ambienceKnob, {606, 228, 90, 103});
+        knob(globalSaturationKnob, {707, 228, 90, 103});
+        const bool midi = modeBox.getSelectedId() == kMidiModeItemId;
+        if (midi)
         {
-            int inputColW = inputRow.getWidth() / 5;
-
-            auto keyCol = inputRow.removeFromLeft(inputColW).reduced(4);
-            rootLabel.setBounds(keyCol.removeFromTop(13));
-            rootBox.setBounds(keyCol.removeFromTop(24));
-            auto scaleCol = inputRow.removeFromLeft(inputColW).reduced(4);
-            scaleLabel.setBounds(scaleCol.removeFromTop(13));
-            scaleBox.setBounds(scaleCol.removeFromTop(24));
-            auto trackCol = inputRow.removeFromLeft(inputColW).reduced(2);
-            trackingKnob.label.setBounds(trackCol.removeFromTop(12));
-            trackingKnob.slider.setBounds(trackCol);
-            auto glideCol = inputRow.removeFromLeft(inputColW).reduced(2);
-            glideKnob.label.setBounds(glideCol.removeFromTop(12));
-            glideKnob.slider.setBounds(glideCol);
-            auto freezeCol = inputRow.reduced(4);
-            freezeButton.setBounds(freezeCol.withY(freezeCol.getY() + 16).withHeight(24));
+            midiVoicingLabel.setBounds(602, 346, 90, 16);
+            midiVoicingBox.setBounds(602, 366, 92, 28);
+            midiInversionLabel.setBounds(705, 346, 94, 16);
+            midiInversionBox.setBounds(705, 366, 94, 28);
+            midiTimingLabel.setBounds(602, 418, 98, 16);
+            midiTimingBox.setBounds(602, 440, 98, 28);
+            knob(midiVelocityKnob, {716, 411, 78, 88});
         }
-        else
-        {
-            const int midiColW = inputRow.getWidth() / 4;
-            auto velocityCol = inputRow.removeFromLeft(midiColW).reduced(2);
-            midiVelocityKnob.label.setBounds(velocityCol.removeFromTop(12));
-            midiVelocityKnob.slider.setBounds(velocityCol);
-
-            auto voicingCol = inputRow.removeFromLeft(midiColW).reduced(4);
-            midiVoicingLabel.setBounds(voicingCol.removeFromTop(13));
-            midiVoicingBox.setBounds(voicingCol.removeFromTop(24));
-
-            auto inversionCol = inputRow.removeFromLeft(midiColW).reduced(4);
-            midiInversionLabel.setBounds(inversionCol.removeFromTop(13));
-            midiInversionBox.setBounds(inversionCol.removeFromTop(24));
-
-            auto timingCol = inputRow.reduced(4);
-            midiTimingLabel.setBounds(timingCol.removeFromTop(13));
-            midiTimingBox.setBounds(timingCol.removeFromTop(24));
-        }
-
-        area.removeFromTop(6);
-        drySectionLabel.setBounds(area.removeFromTop(14));
-        auto dryRow = area.removeFromTop(74);
-        int dryColW = dryRow.getWidth() / 5;
-        for (auto* k : { &dryLevelKnob, &dryPanKnob, &dryFormantKnob, &dryPitchKnob, &dryWidthKnob })
-        {
-            auto cell = dryRow.removeFromLeft(dryColW);
-            k->label.setBounds(cell.removeFromTop(12));
-            k->slider.setBounds(cell.reduced(6, 0));
-        }
-
-        area.removeFromTop(6);
-        characterSectionLabel.setBounds(area.removeFromTop(14));
-        auto charRow = area.removeFromTop(74);
-        int charColW = charRow.getWidth() / 3;
-        for (auto* k : { &humanizeKnob, &characterKnob, &spreadKnob })
-        {
-            auto cell = charRow.removeFromLeft(charColW);
-            k->label.setBounds(cell.removeFromTop(12));
-            k->slider.setBounds(cell.reduced(6, 0));
-        }
-
-        area.removeFromTop(6);
-        auto bottomRow = area.removeFromTop(74);
-        int quarterW = bottomRow.getWidth() / 4;
-        auto ambCol = bottomRow.removeFromLeft(quarterW);
-        ambienceSectionLabel.setBounds(ambCol.removeFromTop(14));
-        ambienceKnob.label.setBounds(ambCol.removeFromTop(12));
-        ambienceKnob.slider.setBounds(ambCol.reduced(6, 0));
-
-        auto mixCol = bottomRow.removeFromLeft(quarterW);
-        mixSectionLabel.setBounds(mixCol.removeFromTop(14));
-        harmonyMixKnob.label.setBounds(mixCol.removeFromTop(12));
-        harmonyMixKnob.slider.setBounds(mixCol.reduced(6, 0));
-
-        auto glueCol = bottomRow.removeFromLeft(quarterW);
-        globalSaturationKnob.label.setBounds(glueCol.removeFromTop(12));
-        globalSaturationKnob.slider.setBounds(glueCol.reduced(6, 0));
-
-        auto outputCol = bottomRow;
-        outputGainKnob.label.setBounds(outputCol.removeFromTop(12));
-        outputGainKnob.slider.setBounds(outputCol.reduced(6, 0));
     }
     else
     {
-        auto harmonyHeader = area.removeFromTop(22);
-        harmonySectionLabel.setBounds(harmonyHeader.removeFromLeft(120));
-        advancedButton.setBounds(harmonyHeader.removeFromRight(105).reduced(1, 1));
-        area.removeFromTop(6);
-
-        int voiceColW = area.getWidth() / kNumHarmonyVoices;
-
         for (int i = 0; i < kNumHarmonyVoices; ++i)
         {
-            auto col = area.withWidth(voiceColW).withX(area.getX() + i * voiceColW).reduced(8, 2);
-            auto& c = voiceColumns[(size_t) i];
-
-            c.title.setBounds(col.removeFromTop(16));
-
-            auto toggleRow = col.removeFromTop(18);
-            int half = toggleRow.getWidth() / 2;
-            c.enableButton.setBounds(toggleRow.removeFromLeft(half));
-            c.soloButton.setBounds(toggleRow);
-
-            col.removeFromTop(4);
-            c.intervalBox.setBounds(col.removeFromTop(24));
-            col.removeFromTop(6);
-
-            // Keep the remaining column area intact for the Advanced rows.
-            // The old code consumed the complete column with removeFromLeft,
-            // leaving the Advanced controls a zero-width rectangle.
-            auto basicRow = col.removeFromTop(76);
-            int third = basicRow.getWidth() / 3;
-            auto levelCol = basicRow.removeFromLeft(third).reduced(2);
-            auto panCol = basicRow.removeFromLeft(third).reduced(2);
-            auto formantCol = basicRow.reduced(2);
-
-            c.levelLabel.setBounds(levelCol.removeFromTop(11));
-            c.levelSlider.setBounds(levelCol.removeFromTop(64));
-            c.panLabel.setBounds(panCol.removeFromTop(11));
-            c.panSlider.setBounds(panCol.removeFromTop(64));
-            c.formantLabel.setBounds(formantCol.removeFromTop(11));
-            c.formantSlider.setBounds(formantCol.removeFromTop(64));
-
-            if (showAdvanced)
-            {
-                col.removeFromTop(10);
-                auto advancedRow1 = col.removeFromTop(54);
-                auto fineCol = advancedRow1.removeFromLeft(advancedRow1.getWidth() / 2).reduced(1);
-                auto toneCol = advancedRow1.reduced(1);
-                c.fineTuneLabel.setBounds(fineCol.removeFromTop(11));
-                c.fineTuneSlider.setBounds(fineCol);
-                c.toneLabel.setBounds(toneCol.removeFromTop(11));
-                c.toneSlider.setBounds(toneCol);
-
-                col.removeFromTop(4);
-                auto advancedRow2 = col.removeFromTop(54);
-                auto saturationCol = advancedRow2.removeFromLeft(advancedRow2.getWidth() / 2).reduced(1);
-                auto delayCol = advancedRow2.reduced(1);
-                c.saturationLabel.setBounds(saturationCol.removeFromTop(11));
-                c.saturationSlider.setBounds(saturationCol);
-                c.microDelayLabel.setBounds(delayCol.removeFromTop(11));
-                c.microDelaySlider.setBounds(delayCol);
-
-                col.removeFromTop(4);
-                auto vibratoRow = col.removeFromTop(54).reduced(1);
-                auto vibratoCol = vibratoRow.removeFromLeft(vibratoRow.getWidth() / 2).reduced(1);
-                auto vibratoRateCol = vibratoRow.reduced(1);
-                c.vibratoLabel.setBounds(vibratoCol.removeFromTop(11));
-                c.vibratoSlider.setBounds(vibratoCol);
-                c.vibratoRateLabel.setBounds(vibratoRateCol.removeFromTop(11));
-                c.vibratoRateSlider.setBounds(vibratoRateCol);
-            }
+            const int x = 24 + i*201;
+            auto& c = voiceColumns[(size_t)i];
+            c.title.setBounds(x+12, 184, 165, 20);
+            c.enableButton.setBounds(x+16, 208, 73, 22);
+            c.soloButton.setBounds(x+102, 208, 75, 22);
+            c.intervalBox.setBounds(x+16, 238, 157, 28);
+            small(c.levelSlider, c.levelLabel, {x+7, 280, 58, 76});
+            small(c.panSlider, c.panLabel, {x+65, 280, 58, 76});
+            small(c.formantSlider, c.formantLabel, {x+123, 280, 60, 76});
+            // All three Advanced rows have fixed non-zero bounds, regardless
+            // of page visibility; toggling cannot consume a layout rectangle.
+            small(c.fineTuneSlider, c.fineTuneLabel, {x+7, 358, 58, 70});
+            small(c.toneSlider, c.toneLabel, {x+65, 358, 58, 70});
+            small(c.saturationSlider, c.saturationLabel, {x+123, 358, 60, 70});
+            small(c.microDelaySlider, c.microDelayLabel, {x+7, 430, 58, 70});
+            small(c.vibratoSlider, c.vibratoLabel, {x+65, 430, 58, 70});
+            small(c.vibratoRateSlider, c.vibratoRateLabel, {x+123, 430, 60, 70});
         }
     }
 }

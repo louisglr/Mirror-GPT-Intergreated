@@ -68,12 +68,18 @@ public:
     // frequencies that would fold back above Nyquist when a voice reads more
     // quickly than real time.  The kernels are made in prepare(), so this is
     // allocation-free and deterministic on the audio thread.
-    float readBandLimited(double absPos, float sourceIncrement) const
+    float readBandLimited(double absPos, float sourceIncrement, float refinement = 0.0f) const
     {
         if (!std::isfinite(absPos) || !std::isfinite(sourceIncrement) || size <= 0)
             return 0.0f;
 
-        if (sourceIncrement <= 1.075f || resampleKernels.empty())
+        const float legacyWeight = sourceIncrement > 1.075f ? 1.0f : 0.0f;
+        const float transition = juce::jlimit(0.0f, 1.0f, (sourceIncrement - 1.05f) / 0.05f);
+        const float continuousWeight = transition * transition * (3.0f - 2.0f * transition);
+        const float safeRefinement = std::isfinite(refinement) ? juce::jlimit(0.0f, 1.0f, refinement) : 0.0f;
+        const float blend = legacyWeight + safeRefinement
+            * (continuousWeight - legacyWeight);
+        if (blend <= 0.0f || resampleKernels.empty())
             return readInterpolated(absPos);
 
         const float cutoff = juce::jlimit(kMinimumResampleCutoff, 1.0f,
@@ -117,6 +123,11 @@ public:
             const float coefficient = phase0Coefficient + bandFraction
                 * (phase1Coefficient - phase0Coefficient);
             output += sourceSample(i0 + (long long) sourceOffset) * coefficient;
+        }
+        if (blend < 1.0f)
+        {
+            const float hermite = readInterpolated(absPos);
+            output = hermite + blend * (output - hermite);
         }
         return std::isfinite(output) ? output : 0.0f;
     }

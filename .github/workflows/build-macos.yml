@@ -29,8 +29,25 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Run deterministic DSP smoke tests
+      - name: Run DSP and full-processor regression tests
         run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture actual JUCE editor pages
+        shell: bash
+        run: |
+          test_binary="$(find build/MirrorIntegrationTests_artefacts/Release -type f -name 'MIRROR Integration Tests' -print -quit)"
+          test -n "$test_binary"
+          "$test_binary" "$PWD/ui-snapshots"
+
+      - name: Preserve test logs and UI snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-QA-${{ github.sha }}
+          path: |
+            build/Testing/Temporary/
+            ui-snapshots/
+          if-no-files-found: warn
 
       - name: Stage plugin bundles
         shell: bash
@@ -44,6 +61,11 @@ jobs:
           while IFS= read -r -d '' bundle; do
             ditto "$bundle" "dist/$(basename "$bundle")"
           done < <(find build -type d -name '*.vst3' -print0)
+
+          test -d dist/MIRROR.component
+          test -d dist/MIRROR.vst3
+          lipo -verify_arch arm64 x86_64 dist/MIRROR.component/Contents/MacOS/MIRROR
+          lipo -verify_arch arm64 x86_64 dist/MIRROR.vst3/Contents/MacOS/MIRROR
 
           if [ -z "$(find dist -mindepth 1 -maxdepth 1 -print -quit)" ]; then
             echo "No AU or VST3 bundle was produced."

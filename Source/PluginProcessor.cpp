@@ -45,6 +45,8 @@ void MirrorAudioProcessor::cacheParameterPointers()
     parameterValues.spread = get("spread");
     parameterValues.ambience = get("ambience");
     parameterValues.harmony = get("harmony");
+    parameterValues.harmonyMix = get("harmonyMix");
+    parameterValues.engineQuality = get("engineQuality");
     parameterValues.globalSaturation = get("globalSaturation");
     parameterValues.outputGain = get("outputGain");
 
@@ -215,6 +217,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout MirrorAudioProcessor::create
         Range(-18.0f, 12.0f, 0.01f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
+    // Append, never repurpose the ignored legacy "harmony" parameter. Old
+    // automation must not unexpectedly attenuate existing songs. AU version
+    // hint 2 keeps this new control after all original version-1 parameters.
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "harmonyMix", 2 }, "Harmony Mix",
+        Range(0.0f, 1.0f, 0.001f), 1.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "engineQuality", 2 }, "Pitch Engine",
+        juce::StringArray{ "Original", "Refined" }, 1));
+
     return { params.begin(), params.end() };
 }
 
@@ -272,8 +285,7 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     ambienceApR2.prepare((int) (sampleRate * 0.017), 0.45f);
 
     numHeldNotes = 0;
-    physicalKeys.fill(false);
-    sustainPedalDown = false;
+    midiNoteState.reset();
     midiAssignedNotes.fill(69);
     midiAssignedVelocities.fill(0.0f);
     midiAssignedFrequencies.fill(440.0f);
@@ -320,6 +332,8 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
 
     dryLevelSmoothed.reset(sampleRate, 0.03);
     harmonyLevelSmoothed.reset(sampleRate, 0.03);
+    engineRefinementSmoothed.reset(sampleRate, 0.02);
+    engineRefinementSmoothed.setCurrentAndTargetValue(parameterValues.engineQuality->load(std::memory_order_relaxed));
     dryWidthSmoothed.reset(sampleRate, 0.05);
     outputGainSmoothed.reset(sampleRate, 0.04);
     dryPanGainLSmoothed.reset(sampleRate, 0.015);
@@ -347,7 +361,7 @@ void MirrorAudioProcessor::prepareToPlay(double sampleRate, int)
     // Harmony/Mix is a locked unity stage in the current product direction;
     // keep its smoother initialised to the same value used in processBlock so
     // an old saved lower mix cannot create a startup level jump.
-    harmonyLevelSmoothed.setCurrentAndTargetValue(1.0f);
+    harmonyLevelSmoothed.setCurrentAndTargetValue(parameterValues.harmonyMix->load(std::memory_order_relaxed));
     dryWidthSmoothed.setCurrentAndTargetValue(parameterValues.dryWidth->load(std::memory_order_relaxed));
     outputGainSmoothed.setCurrentAndTargetValue(parameterValues.outputGain->load(std::memory_order_relaxed));
     const float initialDryPan = juce::jlimit(-1.0f, 1.0f,
@@ -665,79 +679,41 @@ void MirrorAudioProcessor::requestMidiAssignment(int voice, int note, float velo
     midiPendingTargets[index] = true;
 }
 
-void MirrorAudioProcessor::handleMidiMessage(const juce::MidiMessage& m)
+void MirrorAudioProcessor::handleMidiMessage(const juce::MidiMessage& message)
 {
-    if (m.isNoteOn())
+    QueuedMidiEvent event;
+    if (decodeMidiMessage(message, event)) handleQueuedMidiEvent(event);
+}
+
+bool MirrorAudioProcessor::decodeMidiMessage(const juce::MidiMessage& message, QueuedMidiEvent& event)
+{
+    event.channel = message.getChannel();
+    if (event.channel < 1 || event.channel > 16) return false;
+    if (message.isNoteOn())
     {
-        // Only chord-bearing messages invalidate the allocator.  Clock,
-        // aftertouch, pitch bend and unrelated controllers must never force
-        // a voice-leading rebuild on the audio thread.
-        midiAssignmentsDirty = true;
-        const int note = juce::jlimit(0, 127, m.getNoteNumber());
-        physicalKeys[(size_t) note] = true;
-
-        for (int i = 0; i < numHeldNotes; ++i)
-        {
-            if (heldNotes[(size_t) i] == note)
-            {
-                heldNoteVelocities[(size_t) i] = m.getFloatVelocity();
-                return;
-            }
-        }
-
-        if (numHeldNotes >= kMaxHeldNotes)
-            return;
-
-        int insertAt = numHeldNotes;
-        while (insertAt > 0 && heldNotes[(size_t) (insertAt - 1)] > note)
-        {
-            heldNotes[(size_t) insertAt] = heldNotes[(size_t) (insertAt - 1)];
-            heldNoteVelocities[(size_t) insertAt] = heldNoteVelocities[(size_t) (insertAt - 1)];
-            --insertAt;
-        }
-        heldNotes[(size_t) insertAt] = note;
-        heldNoteVelocities[(size_t) insertAt] = m.getFloatVelocity();
-        ++numHeldNotes;
-        return;
+        event.kind = QueuedMidiKind::noteOn;
+        event.data = message.getNoteNumber();
+        event.value = message.getFloatVelocity();
     }
-
-    if (m.isNoteOff())
+    else if (message.isNoteOff())
     {
-        midiAssignmentsDirty = true;
-        const int note = juce::jlimit(0, 127, m.getNoteNumber());
-        physicalKeys[(size_t) note] = false;
-        if (!sustainPedalDown)
-            removeHeldNote(note);
-        if (numHeldNotes == 0)
-            midiPendingTargets.fill(false);
-        return;
+        event.kind = QueuedMidiKind::noteOff;
+        event.data = message.getNoteNumber();
     }
-
-    if (m.isController() && m.getControllerNumber() == 64)
+    else if (message.isController() && message.getControllerNumber() == 64)
     {
-        midiAssignmentsDirty = true;
-        const bool nextSustainState = m.getControllerValue() >= 64;
-        if (sustainPedalDown && !nextSustainState)
-        {
-            // Releasing the pedal lets go only of keys that are physically up.
-            for (int i = numHeldNotes - 1; i >= 0; --i)
-                if (!physicalKeys[(size_t) heldNotes[(size_t) i]])
-                    removeHeldNote(heldNotes[(size_t) i]);
-        }
-        sustainPedalDown = nextSustainState;
-        if (numHeldNotes == 0)
-            midiPendingTargets.fill(false);
-        return;
+        event.kind = QueuedMidiKind::sustain;
+        event.data = message.getControllerValue() >= 64 ? 1 : 0;
     }
-
-    if (m.isAllNotesOff() || m.isAllSoundOff())
-    {
-        midiAssignmentsDirty = true;
-        numHeldNotes = 0;
-        physicalKeys.fill(false);
-        sustainPedalDown = false;
-        midiPendingTargets.fill(false);
-    }
+    else if (message.isAllSoundOff())
+        event.kind = QueuedMidiKind::allSoundOff;
+    else if (message.isAllNotesOff())
+        event.kind = QueuedMidiKind::allNotesOff;
+    else if (message.isController() && message.getControllerNumber() == 121)
+        event.kind = QueuedMidiKind::resetControllers;
+    else
+        return false;
+    return true;
 }
 
 void MirrorAudioProcessor::enqueueMidiMessage(const juce::MidiMessage& message, int sampleOffset)
@@ -745,41 +721,16 @@ void MirrorAudioProcessor::enqueueMidiMessage(const juce::MidiMessage& message, 
     QueuedMidiEvent event;
     event.sampleOffset = juce::jmax(0, sampleOffset);
 
-    if (message.isNoteOn())
-    {
-        event.kind = QueuedMidiKind::noteOn;
-        event.data = juce::jlimit(0, 127, message.getNoteNumber());
-        event.value = message.getFloatVelocity();
-    }
-    else if (message.isNoteOff())
-    {
-        event.kind = QueuedMidiKind::noteOff;
-        event.data = juce::jlimit(0, 127, message.getNoteNumber());
-    }
-    else if (message.isController() && message.getControllerNumber() == 64)
-    {
-        event.kind = QueuedMidiKind::sustain;
-        event.data = message.getControllerValue() >= 64 ? 1 : 0;
-    }
-    else if (message.isAllNotesOff() || message.isAllSoundOff())
-    {
-        event.kind = QueuedMidiKind::allNotesOff;
-        // A panic must not be lost merely because a pathological MIDI stream
-        // filled the bounded queue.
-        if (queuedMidiEventCount >= kMaxQueuedMidiEvents)
-            queuedMidiEventCount = 0;
-    }
-    else
-    {
-        return;
-    }
+    if (!decodeMidiMessage(message, event)) return;
 
     // Leave capacity for note releases under a pathological MIDI burst. A
     // dropped Note On is inaudible; a dropped Note Off can leave a harmony
-    // stuck indefinitely. Panic already clears the queue above.
+    // stuck indefinitely. Channel-mode releases use the same reserve.
     constexpr int releaseReserve = 32;
     const bool safetyRelease = event.kind == QueuedMidiKind::noteOff
         || event.kind == QueuedMidiKind::allNotesOff
+        || event.kind == QueuedMidiKind::allSoundOff
+        || event.kind == QueuedMidiKind::resetControllers
         || (event.kind == QueuedMidiKind::sustain && event.data == 0);
     if (!safetyRelease
         && queuedMidiEventCount >= kMaxQueuedMidiEvents - releaseReserve)
@@ -802,7 +753,16 @@ void MirrorAudioProcessor::enqueueMidiMessage(const juce::MidiMessage& message, 
             }
         }
         if (victim < 0)
+        {
+            // Fail closed on overload. Never lose a release while keeping its
+            // voice alive. Normal output envelopes still fade gracefully.
+            queuedMidiEventCount = 0;
+            midiNoteState.reset();
+            numHeldNotes = 0;
+            midiPendingTargets.fill(false);
+            midiAssignmentsDirty = true;
             return;
+        }
         for (int i = victim + 1; i < queuedMidiEventCount; ++i)
             queuedMidiEvents[(size_t) (i - 1)] = queuedMidiEvents[(size_t) i];
         --queuedMidiEventCount;
@@ -821,68 +781,24 @@ void MirrorAudioProcessor::enqueueMidiMessage(const juce::MidiMessage& message, 
 
 void MirrorAudioProcessor::handleQueuedMidiEvent(const QueuedMidiEvent& event)
 {
-    midiAssignmentsDirty = true;
-
     switch (event.kind)
     {
         case QueuedMidiKind::noteOn:
-        {
-            const int note = juce::jlimit(0, 127, event.data);
-            physicalKeys[(size_t) note] = true;
-            for (int i = 0; i < numHeldNotes; ++i)
-            {
-                if (heldNotes[(size_t) i] == note)
-                {
-                    heldNoteVelocities[(size_t) i] = juce::jlimit(0.0f, 1.0f, event.value);
-                    return;
-                }
-            }
-            if (numHeldNotes >= kMaxHeldNotes)
-                return;
-
-            int insertAt = numHeldNotes;
-            while (insertAt > 0 && heldNotes[(size_t) (insertAt - 1)] > note)
-            {
-                heldNotes[(size_t) insertAt] = heldNotes[(size_t) (insertAt - 1)];
-                heldNoteVelocities[(size_t) insertAt] = heldNoteVelocities[(size_t) (insertAt - 1)];
-                --insertAt;
-            }
-            heldNotes[(size_t) insertAt] = note;
-            heldNoteVelocities[(size_t) insertAt] = juce::jlimit(0.0f, 1.0f, event.value);
-            ++numHeldNotes;
-            return;
-        }
+            midiNoteState.noteOn(event.channel, event.data, event.value); break;
         case QueuedMidiKind::noteOff:
-        {
-            const int note = juce::jlimit(0, 127, event.data);
-            physicalKeys[(size_t) note] = false;
-            if (!sustainPedalDown)
-                removeHeldNote(note);
-            if (numHeldNotes == 0)
-                midiPendingTargets.fill(false);
-            return;
-        }
+            midiNoteState.noteOff(event.channel, event.data); break;
         case QueuedMidiKind::sustain:
-        {
-            const bool nextSustainState = event.data != 0;
-            if (sustainPedalDown && !nextSustainState)
-            {
-                for (int i = numHeldNotes - 1; i >= 0; --i)
-                    if (!physicalKeys[(size_t) heldNotes[(size_t) i]])
-                        removeHeldNote(heldNotes[(size_t) i]);
-            }
-            sustainPedalDown = nextSustainState;
-            if (numHeldNotes == 0)
-                midiPendingTargets.fill(false);
-            return;
-        }
+            midiNoteState.sustain(event.channel, event.data != 0); break;
         case QueuedMidiKind::allNotesOff:
-            numHeldNotes = 0;
-            physicalKeys.fill(false);
-            sustainPedalDown = false;
-            midiPendingTargets.fill(false);
-            return;
+            midiNoteState.allNotesOff(event.channel); break;
+        case QueuedMidiKind::allSoundOff:
+            midiNoteState.allSoundOff(event.channel); break;
+        case QueuedMidiKind::resetControllers:
+            midiNoteState.sustain(event.channel, false); break;
     }
+    numHeldNotes = midiNoteState.collect(heldNotes, heldNoteVelocities);
+    midiAssignmentsDirty = true;
+    if (numHeldNotes == 0) midiPendingTargets.fill(false);
 }
 
 void MirrorAudioProcessor::dispatchQueuedMidiEvents(int sampleOffset)
@@ -1041,8 +957,7 @@ void MirrorAudioProcessor::resetProcessingState(bool clearMidiState)
     if (clearMidiState)
     {
         numHeldNotes = 0;
-        physicalKeys.fill(false);
-        sustainPedalDown = false;
+        midiNoteState.reset();
         midiVoiceHasTargets.fill(false);
         midiAssignmentsDirty = true;
         lastMidiVoicing = lastMidiInversion = -1;
@@ -1101,6 +1016,9 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
     if (mode != lastProcessingMode)
     {
         queuedMidiEventCount = 0;
+        midiNoteState.reset();
+        numHeldNotes = 0;
+        midiVoiceHasTargets.fill(false);
         midiPendingTargets.fill(false);
         midiRetargetGains.fill(1.0f);
         midiAssignmentsDirty = true;
@@ -1115,8 +1033,7 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
         {
             queuedMidiEventCount = 0;
             numHeldNotes = 0;
-            physicalKeys.fill(false);
-            sustainPedalDown = false;
+            midiNoteState.reset();
             midiAssignmentsDirty = true;
             midiPendingTargets.fill(false);
         }
@@ -1146,7 +1063,8 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
     const float dryPitchSemis = parameterValues.dryPitch->load(std::memory_order_relaxed);
 
     dryLevelSmoothed.setTargetValue(parameterValues.dry->load(std::memory_order_relaxed));
-    harmonyLevelSmoothed.setTargetValue(1.0f);
+    harmonyLevelSmoothed.setTargetValue(parameterValues.harmonyMix->load(std::memory_order_relaxed));
+    engineRefinementSmoothed.setTargetValue(parameterValues.engineQuality->load(std::memory_order_relaxed));
     dryWidthSmoothed.setTargetValue(parameterValues.dryWidth->load(std::memory_order_relaxed));
     outputGainSmoothed.setTargetValue(parameterValues.outputGain->load(std::memory_order_relaxed));
     const float dryPanPos = (juce::jlimit(-1.0f, 1.0f, dryPanP) * 0.5f + 0.5f)
@@ -1292,8 +1210,13 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
     if (useAlignedMidi)
     {
         for (auto event = midiMessages.begin(); event != midiMessages.end(); ++event)
-            enqueueMidiMessage((*event).getMessage(),
-                               (*event).samplePosition + reportedLatencySamples);
+        {
+            const auto metadata = *event;
+            // Ignore SysEx before constructing an owning MidiMessage: long
+            // messages can otherwise allocate on the real-time audio thread.
+            if (metadata.numBytes > 0 && metadata.numBytes <= 3)
+                enqueueMidiMessage(metadata.getMessage(), metadata.samplePosition + reportedLatencySamples);
+        }
     }
 
     // UI telemetry is accumulated for the full block and published once.
@@ -1304,7 +1227,9 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
         dispatchQueuedMidiEvents(n);
         while (!useAlignedMidi && midiEvent != midiEnd && (*midiEvent).samplePosition <= n)
         {
-            handleMidiMessage((*midiEvent).getMessage());
+            const auto metadata = *midiEvent;
+            if (metadata.numBytes > 0 && metadata.numBytes <= 3)
+                handleMidiMessage(metadata.getMessage());
             ++midiEvent;
         }
         if (mode == 1 && midiAssignmentsDirty)
@@ -1320,6 +1245,7 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
         float dryR = inputChannels > 1 ? channelR[n] : dryL;
         if (!std::isfinite(dryR))
             dryR = 0.0f;
+        const float refinement = engineRefinementSmoothed.getNextValue();
         float monoIn = 0.5f * (dryL + dryR);
         if (!std::isfinite(monoIn))
             monoIn = 0.0f;
@@ -1370,7 +1296,7 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
         const bool renderDryPitch = dryPitchBlendSmoothed.isSmoothing()
             || dryPitchBlendSmoothed.getTargetValue() > 1.0e-5f;
         const float shifted = renderDryPitch
-            ? dryVoice.process(voiceBuffer, std::exp2(dryPitchSemisNow / 12.0f), detectedFreq)
+            ? dryVoice.process(voiceBuffer, std::exp2(dryPitchSemisNow / 12.0f), detectedFreq, refinement)
             : 0.0f;
         const float dryPitchBlend = dryPitchBlendSmoothed.getNextValue();
         // The pitch generator is intentionally mono-centred, but the original
@@ -1593,7 +1519,7 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
                 voiceFormantSmoothed[voice].setTargetValue(targetFormant);
             }
 
-            float raw = harmonyVoices[voice].process(voiceBuffer, readRatio, detectedFreq);
+            float raw = harmonyVoices[voice].process(voiceBuffer, readRatio, detectedFreq, refinement);
             raw = harmonyFormant[voice].process(raw, voiceFormantSmoothed[voice].getNextValue());
 
             // Colour before the final tone/de-ess stage.  This keeps the
@@ -1718,7 +1644,27 @@ void MirrorAudioProcessor::setStateInformation(const void* data, int sizeInBytes
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName(apvts.state.getType()))
-        apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+    {
+        auto restored = juce::ValueTree::fromXml(*xmlState);
+        // Existing songs keep the old interpolation transfer function.
+        if (!restored.getChildWithProperty("id", "engineQuality").isValid())
+        {
+            juce::ValueTree quality("PARAM");
+            quality.setProperty("id", "engineQuality", nullptr);
+            quality.setProperty("value", 0.0f, nullptr);
+            restored.appendChild(quality, nullptr);
+        }
+        // Loading an old session into an already-used instance must restore
+        // unity, not retain that instance's previous Harmony Mix setting.
+        if (!restored.getChildWithProperty("id", "harmonyMix").isValid())
+        {
+            juce::ValueTree mix("PARAM");
+            mix.setProperty("id", "harmonyMix", nullptr);
+            mix.setProperty("value", 1.0f, nullptr);
+            restored.appendChild(mix, nullptr);
+        }
+        apvts.replaceState(restored);
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

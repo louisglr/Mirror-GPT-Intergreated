@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MirrorPlugin VERSION 1.5.0)
+project(MirrorPlugin VERSION 1.6.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,3 +76,11 @@ target_link_libraries(MirrorDspSmokeTests PRIVATE
 )
 
 add_test(NAME MirrorDspSmoke COMMAND MirrorDspSmokeTests)
+
+# Full-processor and real-editor regression coverage, not just isolated DSP.
+juce_add_console_app(MirrorIntegrationTests PRODUCT_NAME "MIRROR Integration Tests")
+target_sources(MirrorIntegrationTests PRIVATE Tests/IntegrationTests.cpp)
+target_include_directories(MirrorIntegrationTests PRIVATE Source)
+target_link_libraries(MirrorIntegrationTests PRIVATE Mirror juce::juce_audio_utils)
+add_test(NAME MirrorIntegration COMMAND MirrorIntegrationTests)
+set_tests_properties(MirrorIntegration PROPERTIES TIMEOUT 180)
