@@ -21,17 +21,25 @@
 
 ## Verification status
 
-The source has been edited locally. The host does not currently have Xcode / a
-working C++ compiler or CMake. A compiled JUCE build, CTest run and actual editor
-snapshots remain REQUIRED; the added tests are not evidence of a passing run.
-Local checks completed: packaging shell syntax; source-level preservation of
-the original parameter IDs; and an independent numerical model of the resampler
-boundary. For the model's bright synthetic stimulus, the maximum local boundary
-difference fell from 0.123773367 to 0.000007253. This is not a compiled-plugin
-measurement, listening result, CPU benchmark or general audio-quality score.
-GitHub upload/build requires the owner's approval. No installed plugin was
-replaced and the v1.5.0 reference source/artifact was left unchanged.
+GitHub Actions run 37 (2026-09-29) completed successfully on the release
+candidate: universal arm64/x86_64 AU, VST3 and Standalone Release build; DSP and
+full-processor regression suites; ad-hoc bundle-signature verification; AU
+validation; packaged AU/VST3 artifact and SHA-256 manifest. The tested
+macOS ZIP is available as workflow artifact 11017008790 (30-day retention at
+the time of this run). The host used for this review still has no active Xcode
+toolchain, so local build/install was not available.
 
+The automated UI functional tests passed. The hosted off-screen screenshot
+capture step is best-effort because this runner previously exited without
+diagnostics; visual screenshots were not included in the uploaded QA artifact,
+so manually inspect the editor in a DAW. An independent third-party VST3 host
+scan, manual Logic installation, audio listening against the previous build,
+and long-duration / low-buffer stress testing remain outstanding. The test
+artifact is not signed with a Developer ID, notarised, or suitable as a
+commercial installer.
+
+No installed plugin was replaced and the v1.5.0 source/reference artifact was
+left unchanged.
 ## Hard release gates
 
 1. Build both architectures; CTest + AU validation + independent VST3 host scan.
@@ -63,7 +71,7 @@ replaced and the v1.5.0 reference source/artifact was left unchanged.
 
 ## Owner decisions needed
 
-- Approve an isolated GitHub test branch/build (not a public release).
+- Test-branch upload/build has been authorised and completed. Do not merge or publish a public release without separate explicit approval.
 - Confirm availability of Apple Developer credentials and JUCE licensing.
 - Provide a support address / seller identity, and choose the sales-delivery
   route and licence policy before legal copy and an installer can be finalized.
