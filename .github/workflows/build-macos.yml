@@ -70,8 +70,8 @@ jobs:
 
           test -d dist/MIRROR.component
           test -d dist/MIRROR.vst3
-          lipo -verify_arch arm64 x86_64 dist/MIRROR.component/Contents/MacOS/MIRROR
-          lipo -verify_arch arm64 x86_64 dist/MIRROR.vst3/Contents/MacOS/MIRROR
+          lipo dist/MIRROR.component/Contents/MacOS/MIRROR -verify_arch arm64 x86_64
+          lipo dist/MIRROR.vst3/Contents/MacOS/MIRROR -verify_arch arm64 x86_64
 
           if [ -z "$(find dist -mindepth 1 -maxdepth 1 -print -quit)" ]; then
             echo "No AU or VST3 bundle was produced."
