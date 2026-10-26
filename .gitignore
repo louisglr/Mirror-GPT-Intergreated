@@ -1,0 +1,7 @@
+# Build products and local macOS metadata
+/build/
+/cmake-build-*/
+*.component
+*.vst3
+*.app
+.DS_Store
