@@ -1532,7 +1532,8 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
                 continue;
             }
 
-            if (!voiceDspWasRunning[voice])
+            const bool justActivated = !voiceDspWasRunning[voice];
+            if (justActivated)
             {
                 // The PSOLA reader notices the skipped VoiceBuffer positions
                 // and primes itself with its own short activation fade. Clear
@@ -1588,6 +1589,12 @@ void MirrorAudioProcessor::processAudioBlock(juce::AudioBuffer<float>& buffer,
             // recover.
             targetRatio = juce::jlimit(0.25f, 4.0f, targetRatio);
 
+            // A newly audible Auto voice should enter on its chosen chord
+            // tone, not slide from an arbitrary unison seed. Existing note
+            // changes still use continuous glide and all entries retain the
+            // reader's activation fade plus the per-voice level envelope.
+            if (autoEnabled && justActivated)
+                voiceRatioSmoothed[voice] = targetRatio;
             voiceRatioSmoothed[voice] += (targetRatio - voiceRatioSmoothed[voice]) * glideCoeff;
             if (!std::isfinite(voiceRatioSmoothed[voice]))
                 voiceRatioSmoothed[voice] = 1.0f;
