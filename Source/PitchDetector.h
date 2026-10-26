@@ -179,6 +179,20 @@ public:
         expectedMaxHz = maxHz[index];
     }
 
+    void setInstrumentRange()
+    {
+        // Same bounded YIN work/window; extend the upper register for a
+        // single saxophone, trumpet or flute. Chords are not tracked here.
+        if (vocalRangeIndex != 6)
+        {
+            pendingOctaveFrames = 0;
+            pendingOctaveFrequency = 0.0f;
+            vocalRangeIndex = 6;
+        }
+        expectedMinHz = 55.0f;
+        expectedMaxHz = 2000.0f;
+    }
+
 private:
     static constexpr double kTargetAnalysisRate = 16000.0;
     // One unit is one short scalar operation from Copy, Difference, CMND or

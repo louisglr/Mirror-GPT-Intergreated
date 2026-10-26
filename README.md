@@ -13,10 +13,26 @@ dry/wet crossfade. The ignored old `harmony` parameter is retained for session
 compatibility. Old sessions restore the new mix at 100% and the Original engine.
 Presets preserve the new mix and master Output.
 
+## Instruments and Auto development pass
+
+Source now offers **Vocal / Instruments**, independently of **Manual / MIDI /
+Auto** harmony control. Instruments is for one melodic source, including winds;
+it extends tracking to 2 kHz, preserves more upper harmonics and expressive
+pitch movement, and uses a gentler low-level gate. It does not track polyphonic
+chords. Auto arranges diatonic triads within your chosen Key / Scale, favouring
+small voice movements and ignoring brief passing notes. Choose Close / Open /
+Air and Calm / Flow / Responsive. Chromatic deliberately uses parallel fifths
+and octaves, because it supplies no major/minor context.
+
+This is deterministic musical logic, not backing-track chord recognition or
+automatic key detection. Only enabled/solo-participating voices receive notes.
+The original two-value Manual/MIDI automation mapping is preserved. Read
+[EXPERIMENTAL_MODES.md](EXPERIMENTAL_MODES.md) for behaviour and listening checks.
+
 The actual JUCE editor is 840 × 640; tests can capture all four UI states with:
 
 ```sh
-"build/MirrorIntegrationTests_artefacts/Release/MIRROR Integration Tests" "$PWD/ui-snapshots"
+"build/MirrorIntegrationTests_artefacts/Release/MirrorIntegrationTests" "$PWD/ui-snapshots"
 ```
 
 The commercial packaging script is deliberately separate from evaluation CI:

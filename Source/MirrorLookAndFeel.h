@@ -77,6 +77,12 @@ public:
         g.fillEllipse(body);
         g.setColour(gold.withAlpha(slider.isMouseOverOrDragging() ? 0.8f : 0.35f));
         g.drawEllipse(body, 1.0f);
+        // Restrained concentric metal highlights; actual interactive vector
+        // knobs retain a clear pointer and neutral position at every scale.
+        g.setColour(ink.withAlpha(0.07f));
+        g.drawEllipse(body.reduced(2.0f), 0.6f);
+        g.setColour(juce::Colours::black.withAlpha(0.30f));
+        g.drawEllipse(body.reduced(3.5f), 0.5f);
         const float inner = r * 0.25f, outer = juce::jmax(inner, r - 9.0f);
         g.setColour(ink);
         g.drawLine(centre.x + std::sin(angle)*inner, centre.y - std::cos(angle)*inner,
@@ -107,7 +113,8 @@ public:
     void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour&, bool over, bool down) override
     {
         const auto r = button.getLocalBounds().toFloat().reduced(0.5f);
-        g.setColour(button.getToggleState() ? juce::Colour(0xff343a30) : background);
+        const auto top = button.getToggleState() ? juce::Colour(0xff424539) : juce::Colour(0xff242821);
+        g.setGradientFill(juce::ColourGradient(top, 0, 0, background, 0, r.getBottom(), false));
         g.fillRoundedRectangle(r, 6);
         g.setColour(gold.withAlpha(over || down || button.hasKeyboardFocus(true) ? 0.9f : 0.25f));
         g.drawRoundedRectangle(r, 6, 1);
@@ -120,7 +127,8 @@ public:
 
     void drawComboBox(juce::Graphics& g, int width, int height, bool, int, int, int, int, juce::ComboBox& box) override
     {
-        g.setColour(background);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff22261f), 0, 0,
+                                              background, 0, (float) height, false));
         g.fillRoundedRectangle(0.5f, 0.5f, (float)width-1, (float)height-1, 5);
         g.setColour(gold.withAlpha(box.hasKeyboardFocus(true) ? 0.85f : 0.25f));
         g.drawRoundedRectangle(0.5f, 0.5f, (float)width-1, (float)height-1, 5, 1);

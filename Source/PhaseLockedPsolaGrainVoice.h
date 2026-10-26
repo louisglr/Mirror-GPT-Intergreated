@@ -240,7 +240,7 @@ private:
     static constexpr float kMinimumPitchRatio = 0.25f;
     static constexpr float kMaximumPitchRatio = 4.0f;
     static constexpr float kMinimumTrackedPitchHz = 55.0f;
-    static constexpr float kMaximumTrackedPitchHz = 1500.0f;
+    static constexpr float kMaximumTrackedPitchHz = 2200.0f;
     static constexpr float kFallbackPitchHz = 180.0f;
     static constexpr float kMaximumPitchMarkSearchSeconds = 0.030f;
     static constexpr int kInterpolationSafetySamples = 12;

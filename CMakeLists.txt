@@ -52,6 +52,11 @@ target_link_libraries(Mirror PRIVATE
 
 enable_testing()
 
+# Standalone musical invariants: no JUCE dependency, allocations or GUI.
+add_executable(MirrorAutoHarmonyTests Tests/AutoHarmonyTests.cpp)
+target_include_directories(MirrorAutoHarmonyTests PRIVATE Source)
+add_test(NAME MirrorAutoHarmony COMMAND MirrorAutoHarmonyTests)
+
 juce_add_console_app(MirrorDspSmokeTests
     PRODUCT_NAME "MIRROR DSP Smoke Tests"
 )

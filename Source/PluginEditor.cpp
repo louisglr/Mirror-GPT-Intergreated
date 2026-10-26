@@ -13,6 +13,7 @@ namespace
     constexpr int kPresetCustomId = 1;
     constexpr int kFirstPresetId = 2;
     constexpr int kMidiModeItemId = 2;
+    constexpr int kAutoModeItemId = 3;
 
 }
 
@@ -66,19 +67,68 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     harmonyPageButton.onClick = [this] { showPage(1); };
     addAndMakeVisible(harmonyPageButton);
 
-    modeBox.addItemList({ "Manual", "MIDI" }, 1);
+    modeBox.addItemList({ "Manual", "MIDI", "Auto" }, 1);
+    legacyModeBox.addItemList({ "Manual", "MIDI" }, 1);
     modeBox.setComponentID("mode");
+    modeBox.setTooltip("Manual uses your intervals; MIDI follows played notes; Auto arranges harmonies within Key / Scale.");
     addAndMakeVisible(modeBox);
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "mode", modeBox);
+        audioProcessor.apvts, "mode", legacyModeBox);
+    autoHarmonyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, "autoHarmony", autoHarmonyState);
     modeBox.onChange = [this]
     {
-        updateModeDependentControls();
-        resized();
+        const int selection = modeBox.getSelectedId();
+        for (const auto* id : { "autoHarmony", "mode" })
+            if (auto* parameter = audioProcessor.apvts.getParameter(id))
+            {
+                const float value = juce::String(id) == "mode"
+                    ? (selection == kMidiModeItemId ? 1.0f : 0.0f)
+                    : (selection == kAutoModeItemId ? 1.0f : 0.0f);
+                parameter->beginChangeGesture();
+                parameter->setValueNotifyingHost(value);
+                parameter->endChangeGesture();
+            }
+        syncModeSelection();
     };
     modeLabel.setText("MODE", juce::dontSendNotification);
     modeLabel.setColour(juce::Label::textColourId, kTextDim);
     addAndMakeVisible(modeLabel);
+
+    inputProfileBox.addItemList({ "Vocal", "Instruments" }, 1);
+    inputProfileBox.setComponentID("inputProfile");
+    inputProfileBox.setTooltip("Instruments is for a single melodic source: sax, trumpet, flute or similar. Preserves more overtones, quiet dynamics and expressive pitch movement. Not a polyphonic chord tracker.");
+    addAndMakeVisible(inputProfileBox);
+    inputProfileAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "inputProfile", inputProfileBox);
+    inputProfileBox.onChange = [this] { updateModeDependentControls(); markPresetAsCustom(); };
+    inputProfileLabel.setText("SOURCE", juce::dontSendNotification);
+    inputProfileLabel.setColour(juce::Label::textColourId, kTextDim);
+    inputProfileLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(inputProfileLabel);
+
+    autoVoicingBox.addItemList({ "Close", "Open", "Air" }, 1);
+    autoVoicingBox.setComponentID("autoVoicing");
+    autoVoicingBox.setTooltip("Close keeps a compact chord; Open makes space around the melody; Air favours octave space. Only enabled voices participate.");
+    addAndMakeVisible(autoVoicingBox);
+    autoVoicingAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "autoVoicing", autoVoicingBox);
+    autoVoicingBox.onChange = [this] { markPresetAsCustom(); };
+    autoVoicingLabel.setText("VOICING", juce::dontSendNotification);
+    autoVoicingLabel.setColour(juce::Label::textColourId, kTextDim);
+    autoVoicingLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(autoVoicingLabel);
+    autoMotionBox.addItemList({ "Calm", "Flow", "Responsive" }, 1);
+    autoMotionBox.setComponentID("autoMotion");
+    autoMotionBox.setTooltip("How long a new melody note must settle before Auto revoices. Calm ignores short passing tones; Responsive follows faster phrases.");
+    addAndMakeVisible(autoMotionBox);
+    autoMotionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "autoMotion", autoMotionBox);
+    autoMotionBox.onChange = [this] { markPresetAsCustom(); };
+    autoMotionLabel.setText("MOVEMENT", juce::dontSendNotification);
+    autoMotionLabel.setColour(juce::Label::textColourId, kTextDim);
+    autoMotionLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(autoMotionLabel);
+    autoHintLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    autoHintLabel.setColour(juce::Label::textColourId, kAccent);
+    addAndMakeVisible(autoHintLabel);
 
     vocalRangeBox.addItemList({ "Auto", "Bass", "Baritone", "Tenor", "Alto", "Soprano" }, 1);
     addAndMakeVisible(vocalRangeBox);
@@ -271,13 +321,15 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "MIRROR · Quick start",
             "MANUAL: choose Key / Scale, then intervals on the Voices page.\n"
             "MIDI: route MIDI notes from your DAW to MIRROR. Key / Scale do not set played MIDI notes.\n\n"
+            "AUTO: choose Key / Scale and a voicing. MIRROR chooses diatonic chords with smooth voice leading. Chromatic uses parallel fifths / octaves. It does not listen to your backing track.\n\n"
+            "SOURCE / INSTRUMENTS: for a single wind instrument or other monophonic melody, in Manual, MIDI or Auto. Preserves more brightness, quiet dynamics and original vibrato.\n\n"
             "HARMONY MIX controls all generated voices together, without turning down the lead. "
             "Use Lead Level for harmonies-only processing.\n\n"
             "ADVANCED reveals each voice's tone, colour, timing and modulation. "
             "Formant is gentle tone shaping, not independent formant resynthesis.\n\n"
             "Double-click a control to reset it. Drag for continuous adjustment or click its value to type. "
             "Tab selects controls; arrow keys adjust sliders. Hover for help.\n\n"
-            "Development candidate · 1.6.0 · Not a signed commercial release.",
+            "Development candidate · Instruments / Auto exploration.",
             "Got it", this);
     };
     addAndMakeVisible(helpButton);
@@ -285,7 +337,20 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     startTimerHz(20);
 
     mainPageButton.setToggleState(true, juce::dontSendNotification);
+    legacyModeBox.onChange = [this] { syncModeSelection(); };
+    autoHarmonyState.onStateChange = [this] { syncModeSelection(); };
+    syncModeSelection();
     showPage(0);
+}
+
+void MirrorAudioProcessorEditor::syncModeSelection()
+{
+    const bool midi = audioProcessor.apvts.getRawParameterValue("mode")->load() > 0.5f;
+    const bool automatic = !midi && audioProcessor.apvts.getRawParameterValue("autoHarmony")->load() > 0.5f;
+    modeBox.setSelectedId(midi ? kMidiModeItemId : (automatic ? kAutoModeItemId : 1), juce::dontSendNotification);
+    updateModeDependentControls();
+    resized();
+    repaint();
 }
 
 MirrorAudioProcessorEditor::~MirrorAudioProcessorEditor()
@@ -351,6 +416,8 @@ void MirrorAudioProcessorEditor::updateModeDependentControls()
 {
     const bool showMain = currentPage == 0;
     const bool isMidi = modeBox.getSelectedId() == kMidiModeItemId;
+    const bool isAuto = modeBox.getSelectedId() == kAutoModeItemId;
+    const bool instruments = inputProfileBox.getSelectedId() == 2;
     const bool showManualInput = !isMidi;
     const bool showMidiInput = showMain && isMidi;
 
@@ -375,17 +442,27 @@ void MirrorAudioProcessorEditor::updateModeDependentControls()
     midiInversionLabel.setVisible(showMidiInput);
     midiTimingBox.setVisible(showMidiInput);
     midiTimingLabel.setVisible(showMidiInput);
+    autoVoicingBox.setVisible(showMain && isAuto);
+    autoVoicingLabel.setVisible(showMain && isAuto);
+    autoMotionBox.setVisible(showMain && isAuto);
+    autoMotionLabel.setVisible(showMain && isAuto);
+    autoHintLabel.setVisible(showMain && isAuto);
+    vocalRangeBox.setEnabled(!instruments);
+    vocalRangeLabel.setText(instruments ? "RANGE / AUTO" : "VOCAL RANGE", juce::dontSendNotification);
 
 
     inputSectionLabel.setVisible(false);
     for (auto& voice : voiceColumns)
     {
-        voice.intervalBox.setEnabled(!isMidi);
-        voice.intervalBox.setTooltip(isMidi ? "In MIDI mode, played notes set the harmonies." : "Harmony interval relative to the lead and selected scale.");
+        voice.intervalBox.setEnabled(!isMidi && !isAuto);
+        voice.intervalBox.setVisible(currentPage == 1 && !isMidi && !isAuto);
+        voice.targetNoteLabel.setVisible(currentPage == 1);
+        voice.intervalBox.setTooltip("Harmony interval relative to the lead and selected scale.");
     }
     pageHintLabel.setText(currentPage == 0
-        ? "Shape the lead, build the ensemble, then blend."
-        : (isMidi ? "MIDI notes set the harmony. Shape each voice below." : "Choose intervals, balance the voices, then explore Advanced."),
+        ? (isAuto ? "Choose your key. Let the harmony move around you."
+                  : (instruments ? "One instrument. Four new colours. Keep the expression." : "Shape the lead, build the ensemble, then blend."))
+        : (isAuto ? "Auto chooses the notes. You shape their character." : (isMidi ? "MIDI notes set the harmony. Shape each voice below." : "Choose intervals, balance the voices, then explore Advanced.")),
         juce::dontSendNotification);
 }
 
@@ -398,6 +475,11 @@ void MirrorAudioProcessorEditor::setupVoiceColumn(VoiceColumn& c, int voiceIndex
     c.title.setColour(juce::Label::textColourId, kText);
     c.title.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     addAndMakeVisible(c.title);
+    c.targetNoteLabel.setColour(juce::Label::textColourId, kAccent);
+    c.targetNoteLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
+    c.targetNoteLabel.setJustificationType(juce::Justification::centred);
+    c.targetNoteLabel.setComponentID("voiceTarget" + idx);
+    addAndMakeVisible(c.targetNoteLabel);
 
     c.enableButton.setButtonText("ON");
     c.enableButton.setColour(juce::ToggleButton::tickColourId, kAccent);
@@ -707,14 +789,40 @@ void MirrorAudioProcessorEditor::configureValueDisplay(juce::Slider& slider, con
 void MirrorAudioProcessorEditor::timerCallback()
 {
     const bool midi = modeBox.getSelectedId() == kMidiModeItemId;
+    const bool automatic = modeBox.getSelectedId() == kAutoModeItemId;
     const float confidence = audioProcessor.currentConfidence.load(std::memory_order_relaxed);
     const int notes = audioProcessor.currentHeldNoteCount.load(std::memory_order_relaxed);
-    statusLabel.setText(midi ? ("MIDI · " + juce::String(notes) + (notes == 1 ? " note" : " notes"))
-                            : (confidence > 0.45f ? "MANUAL · Vocal detected" : "MANUAL · Ready for a vocal"),
-                        juce::dontSendNotification);
+    const float frequency = audioProcessor.currentDetectedFreq.load(std::memory_order_relaxed);
+    const auto noteName = [](int note) -> juce::String
+    { return note >= 0 && note <= 127 ? juce::MidiMessage::getMidiNoteName(note, true, true, 4) : juce::String::fromUTF8(u8"—"); };
+    const int lead = frequency > 20.0f && confidence > 0.45f
+        ? (int) std::lround(69.0f + 12.0f * std::log2(frequency / 440.0f)) : -1;
+    statusLabel.setText(midi ? juce::String(notes) + " MIDI notes" : (lead >= 0 ? noteName(lead) + " · clear" : "Listening"), juce::dontSendNotification);
+    if (automatic)
+    {
+        const int scale = scaleBox.getSelectedId() - 1;
+        const int degree = audioProcessor.currentAutoChordDegree.load(std::memory_order_relaxed);
+        juce::String text = "Listening for a melody";
+        if (scale == 0) text = "Parallel fifths / octaves\nChoose Major or Minor for chords";
+        else if (degree >= 0 && degree < 7)
+        {
+            const int* steps = scale == 2 ? PitchCorrector::minorSteps : PitchCorrector::majorSteps;
+            const int chordRoot = (rootBox.getSelectedId() - 1 + steps[degree] + 12) % 12;
+            const int third = (steps[(degree+2)%7] - steps[degree] + 12) % 12;
+            const int fifth = (steps[(degree+4)%7] - steps[degree] + 12) % 12;
+            text = juce::MidiMessage::getMidiNoteName(60+chordRoot, true, false, 4)
+                + (fifth == 6 ? " dim" : (third == 3 ? " minor" : " major"))
+                + "\nKey-aware · smooth voice leading";
+        }
+        autoHintLabel.setText(text, juce::dontSendNotification);
+    }
     for (size_t i = 0; i < displayLevels.size(); ++i)
+    {
         displayLevels[i] = juce::jmax(displayLevels[i] * 0.78f,
             audioProcessor.currentVoiceVisualLevels[i].load(std::memory_order_relaxed));
+        const int note = audioProcessor.currentHarmonyNotes[i].load(std::memory_order_relaxed);
+        voiceColumns[i].targetNoteLabel.setText((automatic ? "AUTO  /  " : (midi ? "MIDI  /  " : "")) + noteName(note), juce::dontSendNotification);
+    }
     repaint();
 }
 
@@ -728,10 +836,15 @@ void MirrorAudioProcessorEditor::paint(juce::Graphics& g)
     {
         g.setColour(juce::Colours::black.withAlpha(0.25f));
         g.fillRoundedRectangle(r.translated(0, 3), 12);
-        g.setColour(theme.panel);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff23261f), r.getX(), r.getY(),
+                                              theme.panel, r.getRight(), r.getBottom(), false));
         g.fillRoundedRectangle(r, 12);
-        g.setColour(kAccent.withAlpha(0.14f));
+        g.setColour(kAccent.withAlpha(0.28f));
         g.drawRoundedRectangle(r.reduced(0.5f), 12, 1);
+        g.setColour(kAccent.withAlpha(0.06f));
+        g.drawRoundedRectangle(r.reduced(4.0f), 9, 0.7f);
+        g.setColour(kAccent.withAlpha(0.32f));
+        g.drawHorizontalLine((int)r.getY()+1, r.getX()+18, r.getX()+64);
     };
     if (currentPage == 0)
     {
@@ -780,7 +893,9 @@ void MirrorAudioProcessorEditor::resized()
     rootBox.setBounds(300, 104, 90, 28);
     scaleLabel.setBounds(405, 86, 80, 14);
     scaleBox.setBounds(404, 104, 134, 28);
-    statusLabel.setBounds(558, 104, 256, 26);
+    inputProfileLabel.setBounds(564, 86, 130, 14);
+    inputProfileBox.setBounds(564, 104, 132, 28);
+    statusLabel.setBounds(702, 103, 114, 28);
     pageHintLabel.setBounds(25, 142, currentPage == 0 ? 760 : 594, 20);
     advancedButton.setBounds(674, 140, 142, 26);
     harmonySectionLabel.setBounds(0, 0, 0, 0);
@@ -836,6 +951,11 @@ void MirrorAudioProcessorEditor::resized()
             midiTimingBox.setBounds(602, 440, 98, 28);
             knob(midiVelocityKnob, {716, 411, 78, 88});
         }
+        autoVoicingLabel.setBounds(602, 346, 88, 16);
+        autoVoicingBox.setBounds(602, 366, 88, 28);
+        autoMotionLabel.setBounds(700, 346, 100, 16);
+        autoMotionBox.setBounds(700, 366, 100, 28);
+        autoHintLabel.setBounds(600, 415, 202, 76);
     }
     else
     {
@@ -847,6 +967,8 @@ void MirrorAudioProcessorEditor::resized()
             c.enableButton.setBounds(x+16, 208, 73, 22);
             c.soloButton.setBounds(x+102, 208, 75, 22);
             c.intervalBox.setBounds(x+16, 238, 157, 28);
+            const bool manual = modeBox.getSelectedId() == 1;
+            c.targetNoteLabel.setBounds(x+16, manual ? 268 : 238, 157, manual ? 14 : 28);
             small(c.levelSlider, c.levelLabel, {x+7, 280, 58, 76});
             small(c.panSlider, c.panLabel, {x+65, 280, 58, 76});
             small(c.formantSlider, c.formantLabel, {x+123, 280, 60, 76});

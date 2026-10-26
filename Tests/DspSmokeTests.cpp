@@ -116,6 +116,30 @@ void testPitchShifter()
     expect(std::abs(fifth - 300.0) < 2.0, "fractional 1.5x shift did not hold 300 Hz");
 }
 
+void testInstrumentTracking()
+{
+    for(float hz : {65.0f,220.0f,880.0f,1700.0f})
+    {
+        PitchDetector detector;
+        detector.prepare(48000);
+        detector.setInstrumentRange();
+        for(int n=0;n<48000;++n)
+        {
+            const double phase=juce::MathConstants<double>::twoPi*(double)hz*n/48000.0;
+            detector.pushSample(0.15f*(float)(std::sin(phase)+0.4*std::sin(2*phase)+0.2*std::sin(3*phase)));
+        }
+        expect(std::abs(detector.getFrequency()-hz)/hz<0.015f,
+            "instrument tracker missed harmonic-rich " + std::to_string(hz) + " Hz");
+        expect(detector.getConfidence()>0.7f,"instrument tracker confidence too low");
+        if(hz>1500)
+        {
+            const double shifted=renderPitchShift(48000,hz,1.5f);
+            expect(std::abs(shifted-hz*1.5f)/(hz*1.5f)<0.015,
+                "extended instrument PSOLA register failed");
+        }
+    }
+}
+
 void testMidiOwnership()
 {
     MidiNoteState state;
@@ -309,6 +333,7 @@ int main()
     testPitchDetector(96000.0);
     testPitchDetector(192000.0);
     testPitchShifter();
+    testInstrumentTracking();
     testMidiOwnership();
     testInterpolationBoundary();
     testSaturatorAndReset();

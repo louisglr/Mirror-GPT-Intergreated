@@ -18,6 +18,7 @@ public:
 private:
     void timerCallback() override;
     void configureValueDisplay(juce::Slider&, const juce::String& parameterId);
+    void syncModeSelection();
     MirrorLookAndFeel theme;
     juce::TooltipWindow tooltips { this, 650 };
     juce::Label statusLabel, pageHintLabel, mixHintLabel;
@@ -36,6 +37,7 @@ private:
     struct VoiceColumn
     {
         juce::Label title;
+        juce::Label targetNoteLabel;
         juce::ToggleButton enableButton, soloButton;
         juce::ComboBox intervalBox;
         juce::Slider levelSlider, panSlider, formantSlider;
@@ -66,6 +68,14 @@ private:
     bool showAdvanced = false;
 
     juce::ComboBox modeBox;
+    // The old two-choice mode stays attached to an internal control so saved
+    // normalised MIDI automation cannot be reinterpreted as the new Auto item.
+    juce::ComboBox legacyModeBox;
+    juce::ToggleButton autoHarmonyState;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoHarmonyAttachment;
+    juce::ComboBox inputProfileBox, autoVoicingBox, autoMotionBox;
+    juce::Label inputProfileLabel, autoVoicingLabel, autoMotionLabel, autoHintLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> inputProfileAttachment, autoVoicingAttachment, autoMotionAttachment;
     juce::ComboBox vocalRangeBox, harmonyStyleBox;
     juce::Label modeLabel, vocalRangeLabel, harmonyStyleLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment, vocalRangeAttachment, harmonyStyleAttachment;

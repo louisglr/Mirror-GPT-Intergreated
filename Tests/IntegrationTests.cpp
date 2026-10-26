@@ -30,6 +30,10 @@ void stateTests()
     set(p, "harmonyMix", 0.37f);
     set(p, "engineQuality", 1);
     set(p, "rootNote", 8);
+    set(p, "inputProfile", 1);
+    set(p, "autoHarmony", 1);
+    set(p, "autoVoicing", 2);
+    set(p, "autoMotion", 0);
     juce::MemoryBlock data;
     p.getStateInformation(data);
     MirrorAudioProcessor restored;
@@ -37,14 +41,22 @@ void stateTests()
     check(std::abs(get(restored, "harmonyMix") - 0.37f) < 0.001f, "mix state round-trip");
     check(get(restored, "engineQuality") == 1, "engine state round-trip");
     check(get(restored, "rootNote") == 8, "key state round-trip");
+    check(get(restored, "inputProfile") == 1 && get(restored, "autoHarmony") == 1
+        && get(restored, "autoVoicing") == 2 && get(restored, "autoMotion") == 0, "Auto / Instruments state round-trip");
+    check(p.apvts.getParameter("mode")->convertFrom0to1(1.0f) == 1.0f,
+          "legacy normalised MIDI automation changed meaning");
     auto old = p.apvts.copyState();
     old.removeChild(old.getChildWithProperty("id", "harmonyMix"), nullptr);
     old.removeChild(old.getChildWithProperty("id", "engineQuality"), nullptr);
+    for (const auto* id : { "inputProfile", "autoHarmony", "autoVoicing", "autoMotion" })
+        old.removeChild(old.getChildWithProperty("id", id), nullptr);
     auto xml = old.createXml();
     juce::AudioProcessor::copyXmlToBinary(*xml, data);
     restored.setStateInformation(data.getData(), (int)data.getSize());
     check(get(restored, "harmonyMix") == 1, "old session must restore unity mix");
     check(get(restored, "engineQuality") == 0, "old session must restore Original engine");
+    check(get(restored, "inputProfile") == 0 && get(restored, "autoHarmony") == 0,
+          "old session inherited Instruments / Auto from a used instance");
     const char junk[] = "not plugin state";
     restored.setStateInformation(junk, (int)sizeof(junk));
     check(get(restored, "harmonyMix") == 1, "malformed state changed mix");
@@ -234,12 +246,66 @@ void uiTests(const juce::File& snapshots)
     auto* interval = component(*editor, "voiceInterval1");
     check(interval && !interval->isEnabled(), "Manual interval still enabled in MIDI");
     click(*editor, "MAIN"); capture("midi.png");
+    auto* mode = dynamic_cast<juce::ComboBox*>(component(*editor, "mode"));
+    check(mode != nullptr, "mode selector missing");
+    if (mode) mode->setSelectedId(3, juce::sendNotificationSync);
+    check(get(p,"autoHarmony") == 1 && get(p,"mode") == 0, "Auto selection not connected");
+    auto* autoVoicing = component(*editor, "autoVoicing");
+    check(autoVoicing && autoVoicing->isVisible(), "Auto controls hidden on Main");
+    auto* source = dynamic_cast<juce::ComboBox*>(component(*editor, "inputProfile"));
+    if (source) source->setSelectedId(2, juce::sendNotificationSync);
+    check(get(p,"inputProfile") == 1, "Instruments selector disconnected");
+    capture("auto-instruments.png");
+    click(*editor,"HARMONY");
+    check(interval && !interval->isEnabled() && !interval->isVisible(), "Auto exposed a disconnected interval");
+    auto* target = component(*editor,"voiceTarget1");
+    check(target && target->isVisible(), "Auto note target missing");
+    capture("auto-voices.png");
+    click(*editor,"MAIN");
     set(p, "rootNote", 9); set(p, "scaleType", 2);
     auto* preset = dynamic_cast<juce::ComboBox*>(component(*editor, "preset"));
     check(preset != nullptr, "preset selector missing");
     if (preset) preset->setSelectedId(2, juce::sendNotificationSync);
     check(get(p,"rootNote") == 9 && get(p,"scaleType") == 2, "preset overwrote musical context");
     check(std::abs(get(p,"harmonyMix")-0.42f) < 0.001f, "preset overwrote master mix");
+    check(get(p,"inputProfile") == 1 && get(p,"autoHarmony") == 1, "preset overwrote Source / Auto context");
+}
+
+void autoInstrumentTests(double rate)
+{
+    MirrorAudioProcessor p;
+    set(p,"inputProfile",1); set(p,"autoHarmony",1); set(p,"dry",0);
+    set(p,"humanize",0); set(p,"globalSaturation",0);
+    prepare(p,128,rate);
+    juce::AudioBuffer<float> buffer(2,128);
+    juce::MidiBuffer midi;
+    double energy=0;
+    for(int block=0;block<700;++block)
+    {
+        for(int n=0;n<128;++n)
+        {
+            const double t=(double)(block*128+n)/rate;
+            const float x=0.1f*(float)(std::sin(juce::MathConstants<double>::twoPi*220*t)
+                +0.35*std::sin(juce::MathConstants<double>::twoPi*440*t));
+            buffer.setSample(0,n,x); buffer.setSample(1,n,x);
+        }
+        p.processBlock(buffer,midi);
+        for(int ch=0;ch<2;++ch) for(int n=0;n<128;++n)
+        {
+            const float x=buffer.getSample(ch,n);
+            check(std::isfinite(x) && std::abs(x)<=0.986f, "Auto Instruments generated invalid/unbounded audio");
+            if(block>300) energy+=(double)x*x;
+        }
+    }
+    check(energy>0.01, "Auto Instruments produced no harmony audio");
+    check(p.currentAutoChordDegree.load()>=0, "Auto failed to choose a chord");
+    check(p.currentHarmonyNotes[0].load()>=0 && p.currentHarmonyNotes[1].load()>=0,
+          "enabled Auto voices have no targets");
+    check(p.currentHarmonyNotes[2].load()==-1 && p.currentHarmonyNotes[3].load()==-1,
+          "disabled Auto voices consumed targets");
+    p.reset();
+    check(p.currentAutoChordDegree.load()==-1 && p.currentHarmonyNotes[0].load()==-1,
+          "processor reset retained Auto chord telemetry");
 }
 }
 
@@ -248,6 +314,7 @@ int main(int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
     stateTests(); mixTests(); midiTests(0); midiTests(1); bypassLatencyTest();
     automationStressTest(44100); automationStressTest(48000); automationStressTest(96000);
+    autoInstrumentTests(44100); autoInstrumentTests(48000); autoInstrumentTests(96000);
     uiTests(argc > 1 ? juce::File(juce::String::fromUTF8(argv[1])) : juce::File {});
     std::cout << (failures ? "Integration tests FAILED\n" : "Integration tests passed\n");
     return failures ? 1 : 0;

@@ -18,6 +18,7 @@
 #include "HumanizeWalker.h"
 #include "MusicalIntervals.h"
 #include "MidiNoteState.h"
+#include "AutoHarmonyPlanner.h"
 
 static constexpr int kNumHarmonyVoices = 4;
 static constexpr int kMaxHeldNotes = 8;
@@ -250,6 +251,8 @@ public:
     std::atomic<int> currentHeldNoteCount { 0 };
     // UI-only meters: updated once per audio block, read by the editor timer.
     std::array<std::atomic<float>, kNumHarmonyVoices> currentVoiceVisualLevels {};
+    std::array<std::atomic<int>, kNumHarmonyVoices> currentHarmonyNotes {};
+    std::atomic<int> currentAutoChordDegree { -1 };
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -283,6 +286,10 @@ private:
         std::atomic<float>* harmony = nullptr;
         std::atomic<float>* harmonyMix = nullptr;
         std::atomic<float>* engineQuality = nullptr;
+        std::atomic<float>* inputProfile = nullptr;
+        std::atomic<float>* autoHarmony = nullptr;
+        std::atomic<float>* autoVoicing = nullptr;
+        std::atomic<float>* autoMotion = nullptr;
         std::atomic<float>* globalSaturation = nullptr;
         std::atomic<float>* outputGain = nullptr;
 
@@ -304,6 +311,12 @@ private:
     VoiceBuffer voiceBuffer;
     PitchDetector pitchDetector;
     PitchCorrector pitchCorrector;
+    AutoHarmonyPlanner autoPlanner;
+    std::array<float, kNumHarmonyVoices> autoFrequencies {};
+    int autoRevisionSamples = 0;
+    bool lastAutoEnabled = false;
+    int instrumentBaseMidi = 69;
+    float instrumentBaseFrequency = 440.0f;
 
     PhaseLockedPsolaGrainVoice dryVoice;
     SampleAlignmentDelay dryAlignmentL, dryAlignmentR;
@@ -399,6 +412,7 @@ private:
     float inputEnvelope = 0.0f;
     float voicingAttackCoeff = 0.01f, voicingReleaseCoeff = 0.001f;
     float voicingUnvoicedReleaseCoeff = 0.004f;
+    float instrumentVoicingAttackCoeff = 0.01f, instrumentVoicingReleaseCoeff = 0.001f;
     // A separate per-voice gate gives MIDI note-offs and Enable/Solo changes
     // a musical release instead of abruptly cutting a granular reader.
     std::array<float, kNumHarmonyVoices> voiceRenderGains {};
@@ -408,6 +422,7 @@ private:
 
     juce::SmoothedValue<float> dryLevelSmoothed, harmonyLevelSmoothed, dryWidthSmoothed, outputGainSmoothed;
     juce::SmoothedValue<float> engineRefinementSmoothed;
+    juce::SmoothedValue<float> inputProfileSmoothed;
     juce::SmoothedValue<float> dryPanGainLSmoothed, dryPanGainRSmoothed;
     juce::SmoothedValue<float> dryPitchSemitonesSmoothed, midiVelocitySmoothed;
     // This blend crossfades between the stereo aligned lead and the granular

@@ -43,7 +43,7 @@ public:
         setCutoffs(highPassHz, lowPassHz, false);
     }
 
-    float process(float x)
+    float process(float x, float deEssAmount = 1.0f)
     {
         if (!std::isfinite(x))
         {
@@ -76,7 +76,11 @@ public:
         deEssGain += (targetGain - deEssGain)
                    * (targetGain < deEssGain ? gainAttackCoeff : gainReleaseCoeff);
 
-        const float output = deEssLow + sibilance * deEssGain;
+        // Wind instruments need their upper harmonics, not vocal sibilance
+        // reduction. Keep detector/filter states warm while blending smoothly.
+        const float amount = std::isfinite(deEssAmount)
+            ? juce::jlimit(0.0f, 1.0f, deEssAmount) : 1.0f;
+        const float output = deEssLow + sibilance * (1.0f + (deEssGain - 1.0f) * amount);
         if (!std::isfinite(output) || !std::isfinite(deEssLow)
             || !std::isfinite(deEssEnvelope) || !std::isfinite(broadbandEnvelope)
             || !std::isfinite(deEssGain))

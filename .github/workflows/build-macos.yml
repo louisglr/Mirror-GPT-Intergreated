@@ -33,17 +33,14 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Capture actual JUCE editor pages
-        # JUCE's off-screen snapshot API can terminate the standalone test
-        # process on some hosted macOS runners even though the same editor
-        # controls pass the functional integration suite above. Keep visual
-        # snapshots best-effort; never block bundle validation on that runner
-        # limitation. Any created screenshots are still uploaded below.
-        continue-on-error: true
         shell: bash
         run: |
-          test_binary="$(find build/MirrorIntegrationTests_artefacts/Release -type f -name 'MIRROR Integration Tests' -print -quit)"
-          test -n "$test_binary"
+          test_binary="build/MirrorIntegrationTests_artefacts/Release/MirrorIntegrationTests"
+          test -x "$test_binary"
           "$test_binary" "$PWD/ui-snapshots"
+          for page in main voices advanced midi auto-instruments auto-voices; do
+            test -s "ui-snapshots/$page.png"
+          done
 
       - name: Preserve test logs and UI snapshots
         if: always()
