@@ -344,8 +344,10 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
 
 void MirrorAudioProcessorEditor::syncModeSelection()
 {
-    const bool midi = audioProcessor.apvts.getRawParameterValue("mode")->load() > 0.5f;
-    const bool automatic = !midi && audioProcessor.apvts.getRawParameterValue("autoHarmony")->load() > 0.5f;
+    // ParameterAttachment can notify before APVTS's raw-value cache listener.
+    // Read the parameter itself so host automation never displays an old mode.
+    const bool midi = audioProcessor.apvts.getParameter("mode")->getValue() > 0.5f;
+    const bool automatic = !midi && audioProcessor.apvts.getParameter("autoHarmony")->getValue() > 0.5f;
     modeBox.setSelectedId(midi ? kMidiModeItemId : (automatic ? kAutoModeItemId : 1), juce::dontSendNotification);
     updateModeDependentControls();
     resized();

@@ -243,6 +243,8 @@ void uiTests(const juce::File& snapshots)
     check(fine && fine->isVisible() && fine->getHeight() >= 50, "Advanced does not reveal usable controls");
     capture("advanced.png");
     set(p, "mode", 1);
+    auto* hostMode = dynamic_cast<juce::ComboBox*>(component(*editor, "mode"));
+    check(hostMode && hostMode->getSelectedId() == 2, "host MIDI automation left the mode menu stale");
     auto* interval = component(*editor, "voiceInterval1");
     check(interval && !interval->isEnabled(), "Manual interval still enabled in MIDI");
     click(*editor, "MAIN"); capture("midi.png");

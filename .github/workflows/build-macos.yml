@@ -26,8 +26,8 @@ jobs:
           -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
-      - name: Build
-        run: cmake --build build --config Release --parallel
+      - name: Build regression targets
+        run: cmake --build build --config Release --target MirrorDspSmokeTests MirrorAutoHarmonyTests MirrorIntegrationTests --parallel
 
       - name: Run DSP and full-processor regression tests
         run: ctest --test-dir build -C Release --output-on-failure
@@ -51,6 +51,9 @@ jobs:
             build/Testing/Temporary/
             ui-snapshots/
           if-no-files-found: warn
+
+      - name: Build plugin bundles
+        run: cmake --build build --config Release --target Mirror_AU Mirror_VST3 Mirror_Standalone --parallel
 
       - name: Stage plugin bundles
         shell: bash
