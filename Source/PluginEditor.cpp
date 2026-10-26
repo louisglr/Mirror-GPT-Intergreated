@@ -68,14 +68,9 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     addAndMakeVisible(harmonyPageButton);
 
     modeBox.addItemList({ "Manual", "MIDI", "Auto" }, 1);
-    legacyModeBox.addItemList({ "Manual", "MIDI" }, 1);
     modeBox.setComponentID("mode");
     modeBox.setTooltip("Manual uses your intervals; MIDI follows played notes; Auto arranges harmonies within Key / Scale.");
     addAndMakeVisible(modeBox);
-    modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "mode", legacyModeBox);
-    autoHarmonyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.apvts, "autoHarmony", autoHarmonyState);
     modeBox.onChange = [this]
     {
         const int selection = modeBox.getSelectedId();
@@ -337,8 +332,12 @@ MirrorAudioProcessorEditor::MirrorAudioProcessorEditor(MirrorAudioProcessor& p)
     startTimerHz(20);
 
     mainPageButton.setToggleState(true, juce::dontSendNotification);
-    legacyModeBox.onChange = [this] { syncModeSelection(); };
-    autoHarmonyState.onStateChange = [this] { syncModeSelection(); };
+    modeAttachment = std::make_unique<juce::ParameterAttachment>(
+        *audioProcessor.apvts.getParameter("mode"), [this](float) { syncModeSelection(); }, nullptr);
+    autoHarmonyAttachment = std::make_unique<juce::ParameterAttachment>(
+        *audioProcessor.apvts.getParameter("autoHarmony"), [this](float) { syncModeSelection(); }, nullptr);
+    modeAttachment->sendInitialUpdate();
+    autoHarmonyAttachment->sendInitialUpdate();
     syncModeSelection();
     showPage(0);
 }

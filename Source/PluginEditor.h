@@ -68,17 +68,15 @@ private:
     bool showAdvanced = false;
 
     juce::ComboBox modeBox;
-    // The old two-choice mode stays attached to an internal control so saved
-    // normalised MIDI automation cannot be reinterpreted as the new Auto item.
-    juce::ComboBox legacyModeBox;
-    juce::ToggleButton autoHarmonyState;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoHarmonyAttachment;
+    // Observe both real parameters directly on the message thread. The old
+    // two-choice Mode still retains its saved normalised automation mapping.
+    std::unique_ptr<juce::ParameterAttachment> modeAttachment, autoHarmonyAttachment;
     juce::ComboBox inputProfileBox, autoVoicingBox, autoMotionBox;
     juce::Label inputProfileLabel, autoVoicingLabel, autoMotionLabel, autoHintLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> inputProfileAttachment, autoVoicingAttachment, autoMotionAttachment;
     juce::ComboBox vocalRangeBox, harmonyStyleBox;
     juce::Label modeLabel, vocalRangeLabel, harmonyStyleLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment, vocalRangeAttachment, harmonyStyleAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> vocalRangeAttachment, harmonyStyleAttachment;
 
     // INPUT
     juce::ComboBox rootBox, scaleBox;
